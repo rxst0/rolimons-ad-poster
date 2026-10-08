@@ -18,7 +18,7 @@ from roliposter.config import (MAX_OFFER_ITEMS, MAX_REQUEST_SLOTS, VALID_TAGS, A
 from roliposter.cookie import COOKIE_ENV_VAR, clean_cookie, get_cookie, load_env_file, save_env_value
 from roliposter.items import ItemCatalog
 from roliposter.logsetup import REDACTOR, setup_logging
-from roliposter.paths import config_path, env_path, log_dir, state_path
+from roliposter.paths import config_path, env_path, log_dir, resource_path, state_path
 from roliposter.poster import AuthError, Poster, fmt_duration
 from roliposter.startup import StartupError, fetch_catalog_with_retry, prepare
 from roliposter.state import PostHistory
@@ -82,6 +82,21 @@ def system_uses_dark_mode() -> bool:
             return winreg.QueryValueEx(k, "AppsUseLightTheme")[0] == 0
     except (ImportError, OSError):
         return False
+
+
+def set_app_icon(root: tk.Tk) -> None:
+    """Window/taskbar icon. The explicit AppUserModelID keeps the taskbar from grouping us under python.exe."""
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("rxst0.RolimonsAdPoster")
+    except (ImportError, AttributeError, OSError):
+        pass
+    icon = resource_path("assets/icon.ico")
+    if icon.exists():
+        try:
+            root.iconbitmap(default=str(icon))
+        except tk.TclError:
+            pass
 
 
 def apply_theme(root: tk.Tk) -> bool:
@@ -461,6 +476,7 @@ class App(tk.Tk):
         super().__init__()
         self.withdraw()
         self.title(APP_NAME)
+        set_app_icon(self)
         self.geometry("900x720")
         self.minsize(760, 600)
         dark = apply_theme(self)

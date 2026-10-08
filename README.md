@@ -8,12 +8,16 @@ rotating through ads you set up. It runs as a simple Windows app, so you don't n
 
 ## Download
 
-1. Go to [**Releases**](https://github.com/rxst0/rolimons-ad-poster/releases/latest) and download **`RoliAdPoster.exe`**.
-2. Put it in its own folder (for example `Documents\RoliAdPoster`). It saves its settings next to itself.
-3. Double-click it.
+1. Go to [**Releases**](https://github.com/rxst0/rolimons-ad-poster/releases/latest) and download **`RolimonsAdPosterSetup.exe`**.
+2. Run it and click **Install**. No admin rights are needed.
+3. Open **Rolimons Ad Poster** from the Start Menu, Windows Search, or the desktop shortcut.
+
+To uninstall, go to **Settings → Apps → Installed apps → Rolimons Ad Poster**. This also deletes your saved cookie.
 
 **"Windows protected your PC"?** The app isn't code-signed, so Windows warns about it.
 Click **More info → Run anyway**. You can always read the source code here and build it yourself (see below).
+
+*Portable option:* download `RoliAdPoster.exe` instead and run it from any folder. It saves its settings next to itself.
 
 ## Setup (2 minutes)
 
@@ -67,7 +71,7 @@ every attempt is logged. Click **Stop** any time.
 | *Still on cooldown* | Normal. It waits and retries automatically. |
 | Network errors | It retries with growing delays (5s, 10s, 20s… up to 15 min). |
 
-Files the app keeps next to the `.exe`:
+Files the app keeps next to the `.exe` (installed version: `%LOCALAPPDATA%\Programs\Rolimons Ad Poster`):
 - `config.json`: your ads and settings
 - `.env`: your Rolimons cookie
 - `state.json`: recent post times, so a restart still respects the cooldown
@@ -86,7 +90,8 @@ python -m venv .venv
 .venv\Scripts\python main.py --check   # CLI: validate setup, post nothing
 .venv\Scripts\python main.py --once    # CLI: post one ad
 .venv\Scripts\python main.py           # CLI: post on a timer until Ctrl+C
-build_exe.bat                          # builds dist\RoliAdPoster.exe
+build_exe.bat                          # builds the .exe files, plus the installer if Inno Setup 6 is installed
+                                       # (winget install JRSoftware.InnoSetup)
 ```
 
 The CLI reads `config.json` (see `config.example.json`) and the cookie from `.env`

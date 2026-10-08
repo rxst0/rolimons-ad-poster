@@ -15,7 +15,8 @@ import requests
 from roliposter import __version__
 from roliposter.config import (MAX_OFFER_ITEMS, MAX_REQUEST_SLOTS, VALID_TAGS, Ad, Config, ConfigError,
                                load_config, save_config, validate_config)
-from roliposter.cookie import COOKIE_ENV_VAR, clean_cookie, get_cookie, load_env_file, save_env_value
+from roliposter.cookie import (COOKIE_ENV_VAR, clean_cookie, cookie_info, get_cookie, load_env_file,
+                               looks_like_cookie, save_env_value)
 from roliposter.items import ItemCatalog
 from roliposter.logsetup import REDACTOR, setup_logging
 from roliposter.paths import config_path, env_path, log_dir, resource_path, state_path
@@ -362,12 +363,20 @@ class CookieDialog(Dialog):
 
     def _save(self) -> None:
         value = clean_cookie(self.var.get())
-        if not value or re.search(r"[\s;,]", value):
-            messagebox.showwarning("Cookie", "That doesn't look like a cookie value.", parent=self)
+        if not looks_like_cookie(value):
+            messagebox.showwarning("Cookie", "Couldn't find a Rolimons cookie in what you pasted.\n\n"
+                                   "Copy the Value of _RoliVerification (it starts with \"eyJ\").", parent=self)
+            return
+        info = cookie_info(value)
+        if info and info.expired:
+            messagebox.showwarning("Cookie", "That cookie has already expired. Reload rolimons.com and "
+                                   "copy the new value.", parent=self)
             return
         save_env_value(env_path(), COOKIE_ENV_VAR, value)
         REDACTOR.add_secret(value)
-        log.info("Rolimons cookie saved.")
+        log.info("Rolimons cookie saved%s.", f" for {info.player_name}" if info and info.player_name else "")
+        if info and info.player_id:
+            self.app.use_cookie_user_id(info.player_id)
         self.app.update_cookie_status()
         self.destroy()
 
@@ -620,10 +629,31 @@ class App(tk.Tk):
 
     def update_cookie_status(self) -> None:
         try:
-            ok = bool(get_cookie())
+            cookie = get_cookie()
         except ValueError:
-            ok = False
-        self.cookie_status.config(text="✓ Saved" if ok else "Not set", foreground=self.colors["ok" if ok else "bad"])
+            cookie = None
+        info = cookie_info(cookie) if cookie else None
+        if not cookie:
+            text, color = "Not set", "bad"
+        elif info and info.expired:
+            text, color = "Expired - set a new one", "bad"
+        elif info and info.expires_at:
+            who = f"{info.player_name}, " if info.player_name else ""
+            text, color = f"✓ {who}expires {time.strftime('%d %b %Y', time.localtime(info.expires_at))}", "ok"
+        else:
+            text, color = "✓ Saved", "ok"
+        self.cookie_status.config(text=text, foreground=self.colors[color])
+        self._update_user_status()
+
+    def use_cookie_user_id(self, player_id: int) -> None:
+        """The cookie says which Roblox account it verifies; use that ID so the two can't disagree."""
+        if self.cfg.roblox_user_id != player_id:
+            if self.cfg.roblox_user_id:
+                log.info("Roblox user ID changed from %d to %d to match your cookie.",
+                         self.cfg.roblox_user_id, player_id)
+            self.cfg.roblox_user_id = player_id
+            self.persist()
+        self.var_user.set(str(player_id))
         self._update_user_status()
 
     # ---- ads -----------------------------------------------------------
@@ -732,10 +762,11 @@ class App(tk.Tk):
                 self.poster = Poster(cfg, self.cfg_path, cookie, catalog, stop_event, session)
                 self.history = self.poster.history
                 self.poster.run()
-        except AuthError:
-            log.error("Rolimons rejected your cookie (invalid or expired).")
-            self.events.put(("error", "Rolimons rejected your cookie. It is wrong or has expired.\n\n"
-                                      "Log in to rolimons.com again, copy a fresh _RoliVerification value, "
+        except AuthError as e:
+            log.error("Rolimons rejected your cookie: %s", e)
+            self.events.put(("error", f"Rolimons rejected your cookie (\"{e}\").\n\n"
+                                      "It may have been reset by logging out or re-verifying on Rolimons. "
+                                      "Open rolimons.com, copy the current _RoliVerification value, "
                                       "click \"Set cookie\", and start again."))
         except StartupError as e:
             log.error("%s", e)

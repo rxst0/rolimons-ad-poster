@@ -2,12 +2,13 @@
 import logging
 import random
 import threading
+import time
 from pathlib import Path
 
 import requests
 
 from .config import Config, ConfigError, load_config, validate_config
-from .cookie import COOKIE_ENV_VAR, get_cookie, load_env_file
+from .cookie import COOKIE_ENV_VAR, cookie_info, get_cookie, load_env_file
 from .items import ItemCatalog, fetch_catalog
 from .logsetup import REDACTOR
 from .paths import env_path
@@ -32,7 +33,22 @@ def load_cookie() -> str:
             "(see .env.example)."
         )
     REDACTOR.add_secret(cookie)
+    info = cookie_info(cookie)
+    if info and info.expired:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(info.expires_at))
+        raise StartupError(f"Your Rolimons cookie expired on {when}. Copy a fresh _RoliVerification value "
+                           "from rolimons.com and set it again.")
     return cookie
+
+
+def check_cookie_matches_user(cookie: str, cfg: Config) -> None:
+    info = cookie_info(cookie)
+    if info and info.player_id and info.player_id != cfg.roblox_user_id:
+        raise StartupError(
+            f"Your Rolimons cookie belongs to Roblox user {info.player_id}"
+            f"{f' ({info.player_name})' if info.player_name else ''}, but the user ID in settings is "
+            f"{cfg.roblox_user_id}. Rolimons only lets you post ads for the account you verified."
+        )
 
 
 def load_valid_config(path: Path) -> Config:
@@ -115,6 +131,7 @@ def prepare(config_path: Path, session: requests.Session,
             stop_event: threading.Event | None = None) -> tuple[Config, str, ItemCatalog]:
     cookie = load_cookie()
     cfg = load_valid_config(config_path)
+    check_cookie_matches_user(cookie, cfg)
     log.info("Config OK: %d ad(s), %d enabled, rotation=%s, user ID %d.",
              len(cfg.ads), len(cfg.enabled_ads()), cfg.rotation, cfg.roblox_user_id)
     catalog = fetch_catalog_with_retry(session, stop_event)

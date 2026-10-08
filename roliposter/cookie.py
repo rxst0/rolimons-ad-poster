@@ -1,6 +1,10 @@
 """Loads the _RoliVerification cookie from the environment or a .env file. Never logs it."""
+import base64
+import json
 import os
 import re
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
 COOKIE_ENV_VAR = "ROLI_VERIFICATION"
@@ -22,12 +26,54 @@ def load_env_file(path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
+_TOKEN = re.compile(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+_NAMED = re.compile(r"_RoliVerification\s*[=:]\s*[\"']?([^\"'\s;,]+)", re.IGNORECASE)
+
+
+@dataclass
+class CookieInfo:
+    player_id: int | None
+    player_name: str | None
+    expires_at: float | None
+
+    @property
+    def expired(self) -> bool:
+        return self.expires_at is not None and self.expires_at <= time.time()
+
+
 def clean_cookie(value: str) -> str:
-    """Accepts either the bare value or a pasted '_RoliVerification=...' string."""
-    value = value.strip().strip("'\"")
-    if value.lower().startswith("_roliverification="):
-        value = value.split("=", 1)[1]
-    return value.split(";", 1)[0].strip()
+    """Pulls the cookie value out of whatever was pasted: the bare value, name=value,
+    the DevTools row (_RoliVerification:"..."), a quoted value, or a whole Cookie header."""
+    value = value.strip()
+    m = _NAMED.search(value)
+    if m:
+        return m.group(1)
+    tokens = _TOKEN.findall(value)
+    if len(tokens) == 1:
+        return tokens[0]
+    return value.strip("'\"").split(";", 1)[0].strip()
+
+
+def looks_like_cookie(value: str) -> bool:
+    return bool(_TOKEN.fullmatch(value))
+
+
+def cookie_info(value: str) -> CookieInfo | None:
+    """Reads the (unverified) token payload: who it belongs to and when it expires."""
+    if not looks_like_cookie(value):
+        return None
+    try:
+        part = value.split(".")[1]
+        payload = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+        player = payload.get("player_data") or {}
+        exp = payload.get("exp")
+        return CookieInfo(
+            player_id=int(player["id"]) if "id" in player else None,
+            player_name=player.get("name"),
+            expires_at=float(exp) if exp else None,
+        )
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
 
 
 def get_cookie() -> str | None:

@@ -8,11 +8,11 @@ import time
 import tkinter as tk
 import webbrowser
 from tkinter import messagebox, ttk
-from tkinter.scrolledtext import ScrolledText
 
 import requests
 
 from roliposter import __version__
+from roliposter import theme
 from roliposter.config import (MAX_OFFER_ITEMS, MAX_REQUEST_SLOTS, VALID_TAGS, Ad, Config, ConfigError,
                                load_config, save_config, validate_config)
 from roliposter.cookie import (COOKIE_ENV_VAR, clean_cookie, cookie_info, get_cookie, load_env_file,
@@ -29,32 +29,27 @@ log = logging.getLogger("roliposter.gui")
 
 APP_NAME = "Rolimons Ad Poster"
 REPO_URL = "https://github.com/rxst0/rolimons-ad-poster"
-PAD = 8
+C = theme.COLORS
 
 HELP_TEXT = f"""\
 GETTING STARTED
 
-1. Roblox user ID
-   Open your Roblox profile. The number in the address bar is your ID:
-   roblox.com/users/123456789/profile  ->  123456789
-   (You can paste the whole profile link; the ID is pulled out for you.)
-
-2. Rolimons cookie
+1. Rolimons cookie
    This lets the app post ads as you on Rolimons. It is NOT your Roblox login.
    a) Go to rolimons.com, log in and verify your Roblox account.
    b) Press F12 to open developer tools.
    c) Chrome/Edge: Application tab > Cookies > https://www.rolimons.com
       Firefox: Storage tab > Cookies > https://www.rolimons.com
-   d) Find "_RoliVerification" and copy its Value.
+   d) Find "_RoliVerification" and copy its Value (or the whole row).
    e) Click "Set cookie" here and paste it.
-   Never share this value with anyone. If posting says the cookie expired,
-   repeat these steps.
+   Your Roblox user ID is filled in automatically from the cookie.
+   Never share this value with anyone.
 
-3. Ads
+2. Ads
    Click "New ad". Search items by name, add up to 4 you offer and up to 4
    things you want (items and/or tags like "upgrade" or "any"). Save.
 
-4. Start
+3. Start
    Click "Start posting". One ad is posted roughly every 15 minutes
    (Rolimons' cooldown) plus a small random delay, cycling through your ads.
    Leave the app open. Click "Stop" any time.
@@ -75,16 +70,6 @@ Version {__version__} - {REPO_URL}
 
 
 # ---- helpers ---------------------------------------------------------------
-def system_uses_dark_mode() -> bool:
-    try:
-        import winreg
-        key = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
-            return winreg.QueryValueEx(k, "AppsUseLightTheme")[0] == 0
-    except (ImportError, OSError):
-        return False
-
-
 def set_app_icon(root: tk.Tk) -> None:
     """Window/taskbar icon. The explicit AppUserModelID keeps the taskbar from grouping us under python.exe."""
     try:
@@ -100,20 +85,6 @@ def set_app_icon(root: tk.Tk) -> None:
             pass
 
 
-def apply_theme(root: tk.Tk) -> bool:
-    """Applies the Sun Valley (Windows 11) theme if available. Returns True for dark mode."""
-    dark = system_uses_dark_mode()
-    try:
-        import sv_ttk
-        sv_ttk.set_theme("dark" if dark else "light", root)
-        return dark
-    except Exception:
-        style = ttk.Style(root)
-        if "vista" in style.theme_names():
-            style.theme_use("vista")
-        return False
-
-
 def short_name(catalog: ItemCatalog | None, item_id: int) -> str:
     item = catalog.get(item_id) if catalog else None
     if item is None:
@@ -125,6 +96,33 @@ def parse_user_id(text: str) -> int | None:
     text = text.strip()
     m = re.search(r"users/(\d+)", text) or re.fullmatch(r"(\d+)", text)
     return int(m.group(1)) if m else None
+
+
+def card(parent: tk.Misc, title: str | None = None, subtitle: str | None = None) -> ttk.Frame:
+    """A bordered surface with an optional heading; returns the frame to put content in."""
+    frame = ttk.Frame(parent, style="Card.TFrame", padding=(18, 14, 18, 16))
+    if title:
+        head = ttk.Frame(frame)
+        head.pack(fill="x", pady=(0, 10))
+        ttk.Label(head, text=title, style="Title.TLabel").pack(side="left")
+        if subtitle:
+            ttk.Label(head, text=subtitle, style="Muted.TLabel").pack(side="left", padx=(10, 0), pady=(3, 0))
+        frame.head = head
+    return frame
+
+
+def scrolled_tree(parent: tk.Misc, columns: tuple[str, ...], height: int) -> tuple[ttk.Frame, ttk.Treeview]:
+    wrap = ttk.Frame(parent)
+    wrap.columnconfigure(0, weight=1)
+    wrap.rowconfigure(0, weight=1)
+    tree = ttk.Treeview(wrap, columns=columns, show="headings", height=height, selectmode="browse")
+    bar = ttk.Scrollbar(wrap, orient="vertical", command=tree.yview)
+    tree.configure(yscrollcommand=bar.set)
+    tree.grid(row=0, column=0, sticky="nsew")
+    bar.grid(row=0, column=1, sticky="ns")
+    tree.tag_configure("odd", background=theme.STRIPE)
+    tree.tag_configure("off", foreground=theme.MUTED)
+    return wrap, tree
 
 
 class QueueLogHandler(logging.Handler):
@@ -140,16 +138,24 @@ class QueueLogHandler(logging.Handler):
 
 
 class Dialog(tk.Toplevel):
-    """Modal dialog base: centered on the parent, Esc closes."""
+    """Modal dialog base: themed, centered on the parent, Esc closes."""
 
     def __init__(self, parent: tk.Misc, title: str):
         super().__init__(parent)
         self.withdraw()
         self.title(title)
+        self.configure(bg=theme.SURFACE)
         self.transient(parent)
         self.bind("<Escape>", lambda _e: self.destroy())
-        self.body = ttk.Frame(self, padding=16)
+        self.body = ttk.Frame(self, padding=22)
         self.body.pack(fill="both", expand=True)
+
+    def footer(self, parent: tk.Misc, save_text: str, on_save, cancel: bool = True) -> ttk.Frame:
+        foot = ttk.Frame(parent)
+        ttk.Button(foot, text=save_text, style="Accent.TButton", width=12, command=on_save).pack(side="right")
+        if cancel:
+            ttk.Button(foot, text="Cancel", width=12, command=self.destroy).pack(side="right", padx=(0, 8))
+        return foot
 
     def show(self) -> None:
         self.update_idletasks()
@@ -157,6 +163,7 @@ class Dialog(tk.Toplevel):
         x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_reqwidth()) // 2
         y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_reqheight()) // 3
         self.geometry(f"+{max(0, x)}+{max(0, y)}")
+        theme.dark_title_bar(self)
         self.deiconify()
         self.grab_set()
         self.focus_set()
@@ -169,88 +176,99 @@ class AdEditor(Dialog):
         self.app = app
         self.ad = copy.deepcopy(ad)
         self.on_save = on_save
-        self.minsize(900, 520)
+        self.minsize(1000, 560)
 
         b = self.body
         b.columnconfigure((0, 1, 2), weight=1, uniform="col")
-        b.rowconfigure(1, weight=1)
+        b.rowconfigure(2, weight=1)
 
+        # Name row
         top = ttk.Frame(b)
-        top.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 12))
-        ttk.Label(top, text="Ad name").pack(side="left")
+        top.grid(row=0, column=0, columnspan=3, sticky="ew")
+        top.columnconfigure(0, weight=1)
+        ttk.Label(top, text="AD NAME", style="Field.TLabel").grid(row=0, column=0, sticky="w")
         self.var_name = tk.StringVar(value=self.ad.name)
-        name_entry = ttk.Entry(top, textvariable=self.var_name, width=40)
-        name_entry.pack(side="left", padx=8)
+        name_entry = ttk.Entry(top, textvariable=self.var_name, width=44, font=theme.FONT_TITLE)
+        name_entry.grid(row=1, column=0, sticky="w", pady=(4, 0))
         self.var_enabled = tk.BooleanVar(value=self.ad.enabled)
-        ttk.Checkbutton(top, text="Include in rotation", variable=self.var_enabled).pack(side="left", padx=8)
+        ttk.Checkbutton(top, text="Include in rotation", variable=self.var_enabled).grid(row=1, column=1, sticky="e")
+        ttk.Separator(b).grid(row=1, column=0, columnspan=3, sticky="ew", pady=16)
 
         # Search
-        sf = ttk.LabelFrame(b, text=" Find items ", padding=8)
-        sf.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
-        sf.rowconfigure(1, weight=1)
+        sf = ttk.Frame(b)
+        sf.grid(row=2, column=0, sticky="nsew", padx=(0, 12))
+        sf.rowconfigure(2, weight=1)
         sf.columnconfigure(0, weight=1)
+        ttk.Label(sf, text="Find items", style="Title.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
         self.var_search = tk.StringVar()
         search = ttk.Entry(sf, textvariable=self.var_search)
-        search.grid(row=0, column=0, sticky="ew")
+        search.grid(row=1, column=0, sticky="ew")
         self.var_search.trace_add("write", lambda *_: self._search())
-        self.results = ttk.Treeview(sf, columns=("name", "value"), show="headings", height=10, selectmode="browse")
-        self.results.heading("name", text="Item")
-        self.results.heading("value", text="Value")
+        wrap, self.results = scrolled_tree(sf, ("name", "value"), 10)
+        self.results.heading("name", text="ITEM", anchor="w")
+        self.results.heading("value", text="VALUE", anchor="e")
         self.results.column("name", width=170)
-        self.results.column("value", width=80, anchor="e")
-        self.results.grid(row=1, column=0, sticky="nsew", pady=6)
+        self.results.column("value", width=90, anchor="e", stretch=False)
+        wrap.grid(row=2, column=0, sticky="nsew", pady=8)
         self.results.bind("<Double-1>", lambda _e: self._add("offer"))
         bf = ttk.Frame(sf)
-        bf.grid(row=2, column=0, sticky="ew")
-        ttk.Button(bf, text="Add to offer", command=lambda: self._add("offer")).pack(side="left", expand=True, fill="x")
-        ttk.Button(bf, text="Add to want", command=lambda: self._add("request")).pack(side="left", expand=True, fill="x", padx=(6, 0))
-        self.search_hint = ttk.Label(sf, text="Type a name, acronym or item ID.", foreground="gray")
-        self.search_hint.grid(row=3, column=0, sticky="w", pady=(6, 0))
+        bf.grid(row=3, column=0, sticky="ew")
+        bf.columnconfigure((0, 1), weight=1)
+        ttk.Button(bf, text="Add to offer", command=lambda: self._add("offer")).grid(row=0, column=0, sticky="ew")
+        ttk.Button(bf, text="Add to want", command=lambda: self._add("request")).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        self.search_hint = ttk.Label(sf, text="Type a name, acronym or item ID.", style="Muted.TLabel")
+        self.search_hint.grid(row=4, column=0, sticky="w", pady=(8, 0))
 
         # Offer
-        of = ttk.LabelFrame(b, text=f" You offer (max {MAX_OFFER_ITEMS}) ", padding=8)
-        of.grid(row=1, column=1, sticky="nsew", padx=6)
+        of = ttk.Frame(b)
+        of.grid(row=2, column=1, sticky="nsew", padx=6)
         of.columnconfigure(0, weight=1)
+        ttk.Label(of, text="You offer", style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(of, text=f"Up to {MAX_OFFER_ITEMS} items", style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 8))
         self.offer_tree = self._item_list(of)
-        self.offer_tree.grid(row=0, column=0, sticky="nsew")
-        ttk.Button(of, text="Remove selected", command=lambda: self._remove("offer")).grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        self.offer_tree.grid(row=2, column=0, sticky="ew")
+        ttk.Button(of, text="Remove selected", command=lambda: self._remove("offer")).grid(row=3, column=0, sticky="ew", pady=(8, 0))
 
         # Request
-        rf = ttk.LabelFrame(b, text=f" You want (max {MAX_REQUEST_SLOTS}, items + tags) ", padding=8)
-        rf.grid(row=1, column=2, sticky="nsew", padx=(6, 0))
+        rf = ttk.Frame(b)
+        rf.grid(row=2, column=2, sticky="nsew", padx=(12, 0))
         rf.columnconfigure((0, 1), weight=1)
+        ttk.Label(rf, text="You want", style="Title.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(rf, text=f"Up to {MAX_REQUEST_SLOTS} items and tags combined", style="Muted.TLabel").grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(0, 8))
         self.request_tree = self._item_list(rf)
-        self.request_tree.grid(row=0, column=0, columnspan=2, sticky="nsew")
-        ttk.Button(rf, text="Remove selected", command=lambda: self._remove("request")).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 8))
-        ttk.Label(rf, text="Tags").grid(row=2, column=0, columnspan=2, sticky="w")
+        self.request_tree.grid(row=2, column=0, columnspan=2, sticky="ew")
+        ttk.Button(rf, text="Remove selected", command=lambda: self._remove("request")).grid(
+            row=3, column=0, columnspan=2, sticky="ew", pady=(8, 14))
+        ttk.Label(rf, text="TAGS", style="Field.TLabel").grid(row=4, column=0, columnspan=2, sticky="w", pady=(0, 4))
         self.tag_vars: dict[str, tk.BooleanVar] = {}
         for i, tag in enumerate(VALID_TAGS):
             v = tk.BooleanVar(value=tag in self.ad.request_tags)
             self.tag_vars[tag] = v
             ttk.Checkbutton(rf, text=tag, variable=v, command=lambda t=tag: self._toggle_tag(t)).grid(
-                row=3 + i // 2, column=i % 2, sticky="w")
+                row=5 + i // 2, column=i % 2, sticky="w")
 
         # Footer
-        foot = ttk.Frame(b)
-        foot.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(12, 0))
-        self.summary = ttk.Label(foot, text="")
+        ttk.Separator(b).grid(row=3, column=0, columnspan=3, sticky="ew", pady=16)
+        foot = self.footer(b, "Save ad", self._save)
+        foot.grid(row=4, column=0, columnspan=3, sticky="ew")
+        self.summary = ttk.Label(foot, text="", style="Muted.TLabel")
         self.summary.pack(side="left")
-        ttk.Button(foot, text="Save", style="Accent.TButton", width=12, command=self._save).pack(side="right")
-        ttk.Button(foot, text="Cancel", width=12, command=self.destroy).pack(side="right", padx=8)
 
         self._refresh_lists()
         if not app.catalog:
             self.search_hint.config(text="Item list still loading... you can type an item ID.")
         self.show()
-        search.focus_set() if self.ad.name else name_entry.focus_set()
+        search.focus_set()
 
     @staticmethod
     def _item_list(parent) -> ttk.Treeview:
         tree = ttk.Treeview(parent, columns=("name", "value"), show="headings", height=4, selectmode="browse")
-        tree.heading("name", text="Item")
-        tree.heading("value", text="Value")
+        tree.heading("name", text="ITEM", anchor="w")
+        tree.heading("value", text="VALUE", anchor="e")
         tree.column("name", width=150)
-        tree.column("value", width=80, anchor="e", stretch=False)
+        tree.column("value", width=90, anchor="e", stretch=False)
+        tree.tag_configure("odd", background=theme.STRIPE)
         return tree
 
     def _search(self) -> None:
@@ -266,8 +284,9 @@ class AdEditor(Dialog):
                     rank = 0 if q in (item.acronym.lower(), str(item.id)) else 1 if item.name.lower().startswith(q) else 2
                     matches.append((rank, -item.default_value, item))
             matches.sort(key=lambda m: (m[0], m[1]))
-            for _, _, item in matches[:60]:
-                self.results.insert("", "end", iid=str(item.id), values=(item.label, f"{item.default_value:,}"))
+            for n, (_, _, item) in enumerate(matches[:60]):
+                self.results.insert("", "end", iid=str(item.id), values=(item.label, f"{item.default_value:,}"),
+                                    tags=("odd",) if n % 2 else ())
         elif q.isdigit():
             self.results.insert("", "end", iid=q, values=(f"Item {q}", "?"))
 
@@ -309,15 +328,16 @@ class AdEditor(Dialog):
         catalog = self.app.catalog
         for tree, ids in ((self.offer_tree, self.ad.offer_item_ids), (self.request_tree, self.ad.request_item_ids)):
             tree.delete(*tree.get_children())
-            for item_id in ids:
+            for n, item_id in enumerate(ids):
                 item = catalog.get(item_id) if catalog else None
-                tree.insert("", "end", values=(item.label, f"{item.default_value:,}") if item
-                            else (f"Item {item_id}", "not found" if catalog else "?"))
+                values = ((item.label, f"{item.default_value:,}") if item
+                          else (f"Item {item_id}", "not found" if catalog else "?"))
+                tree.insert("", "end", values=values, tags=("odd",) if n % 2 else ())
         if catalog:
             av = evaluate_ad(self.ad, catalog)
-            text = f"Offer value: {av.offer_value:,}"
+            text = f"Offer value  {av.offer_value:,}"
             if av.request_value is not None:
-                text += f"    Want value: {av.request_value:,}    ({av.overpay_percent:+.0f}%)"
+                text += f"      Want value  {av.request_value:,}      ({av.overpay_percent:+.0f}%)"
             self.summary.config(text=text)
 
     def _save(self) -> None:
@@ -344,20 +364,18 @@ class CookieDialog(Dialog):
         super().__init__(app, "Rolimons cookie")
         self.app = app
         b = self.body
-        ttk.Label(b, text="Paste your _RoliVerification cookie value", font=("Segoe UI", 11, "bold")).pack(anchor="w")
-        ttk.Label(b, justify="left", text=(
-            "rolimons.com (logged in + verified) > F12 > Application/Storage > Cookies >\n"
-            "https://www.rolimons.com > _RoliVerification > copy the Value.\n"
+        ttk.Label(b, text="Set your Rolimons cookie", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(b, style="Muted.TLabel", justify="left", text=(
+            "On rolimons.com (logged in and verified), press F12 > Application (or Storage) > Cookies >\n"
+            "https://www.rolimons.com, then copy the _RoliVerification value (or the whole row).\n\n"
             "This is NOT your Roblox password or .ROBLOSECURITY. Never share it."
-        )).pack(anchor="w", pady=(4, 10))
+        )).pack(anchor="w", pady=(6, 14))
+        ttk.Label(b, text="COOKIE", style="Field.TLabel").pack(anchor="w", pady=(0, 4))
         self.var = tk.StringVar()
-        entry = ttk.Entry(b, textvariable=self.var, show="•", width=60)
+        entry = ttk.Entry(b, textvariable=self.var, show="•", width=64)
         entry.pack(fill="x")
         entry.bind("<Return>", lambda _e: self._save())
-        foot = ttk.Frame(b)
-        foot.pack(fill="x", pady=(12, 0))
-        ttk.Button(foot, text="Save", style="Accent.TButton", width=12, command=self._save).pack(side="right")
-        ttk.Button(foot, text="Cancel", width=12, command=self.destroy).pack(side="right", padx=8)
+        self.footer(b, "Save", self._save).pack(fill="x", pady=(18, 0))
         self.show()
         entry.focus_set()
 
@@ -392,53 +410,56 @@ class SettingsDialog(Dialog):
 
         def section(text):
             nonlocal row
-            ttk.Label(b, text=text, font=("Segoe UI", 10, "bold")).grid(row=row, column=0, columnspan=2, sticky="w", pady=(10 if row else 0, 4))
+            if row:
+                ttk.Separator(b).grid(row=row, column=0, columnspan=2, sticky="ew", pady=14)
+                row += 1
+            ttk.Label(b, text=text, style="Title.TLabel").grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 8))
             row += 1
 
         def field(label, widget):
             nonlocal row
-            ttk.Label(b, text=label).grid(row=row, column=0, sticky="w", pady=3, padx=(0, 12))
-            widget.grid(row=row, column=1, sticky="w", pady=3)
+            ttk.Label(b, text=label).grid(row=row, column=0, sticky="w", pady=5, padx=(0, 20))
+            widget.grid(row=row, column=1, sticky="w", pady=5)
+            row += 1
+
+        def check(text, var):
+            nonlocal row
+            ttk.Checkbutton(b, text=text, variable=var).grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
             row += 1
 
         section("Posting")
         self.var_rotation = tk.StringVar(value=c.rotation)
         rot = ttk.Frame(b)
         ttk.Radiobutton(rot, text="In order", value="sequential", variable=self.var_rotation).pack(side="left")
-        ttk.Radiobutton(rot, text="Random", value="random", variable=self.var_rotation).pack(side="left", padx=12)
+        ttk.Radiobutton(rot, text="Random", value="random", variable=self.var_rotation).pack(side="left", padx=16)
         field("Ad order", rot)
         self.var_jmin = tk.StringVar(value=f"{c.jitter_seconds[0]:g}")
         self.var_jmax = tk.StringVar(value=f"{c.jitter_seconds[1]:g}")
         jit = ttk.Frame(b)
         ttk.Spinbox(jit, from_=0, to=1800, textvariable=self.var_jmin, width=6).pack(side="left")
-        ttk.Label(jit, text=" to ").pack(side="left")
+        ttk.Label(jit, text="  to  ").pack(side="left")
         ttk.Spinbox(jit, from_=0, to=1800, textvariable=self.var_jmax, width=6).pack(side="left")
-        ttk.Label(jit, text=" seconds").pack(side="left")
+        ttk.Label(jit, text="  seconds", style="Muted.TLabel").pack(side="left")
         field("Extra random delay", jit)
         self.var_max = tk.StringVar(value=str(c.max_ads_per_24h))
         field("Max ads per 24 hours", ttk.Spinbox(b, from_=1, to=96, textvariable=self.var_max, width=6))
 
-        section("Value checks (uses Rolimons values)")
+        section("Value checks")
         vm = c.value_mode
         self.var_value = tk.BooleanVar(value=vm.enabled)
-        ttk.Checkbutton(b, text="Warn me when an ad overpays", variable=self.var_value).grid(row=row, column=0, columnspan=2, sticky="w")
-        row += 1
+        check("Warn me when an ad overpays", self.var_value)
         self.var_overpay = tk.StringVar(value=f"{vm.overpay_warn_percent:g}")
         op = ttk.Frame(b)
         ttk.Spinbox(op, from_=0, to=1000, textvariable=self.var_overpay, width=6).pack(side="left")
-        ttk.Label(op, text=" % more value than it asks for").pack(side="left")
+        ttk.Label(op, text="  % more value than it asks for", style="Muted.TLabel").pack(side="left")
         field("Overpay threshold", op)
         self.var_skip = tk.BooleanVar(value=vm.skip_overpaying_ads)
-        ttk.Checkbutton(b, text="Don't post ads that overpay", variable=self.var_skip).grid(row=row, column=0, columnspan=2, sticky="w")
-        row += 1
+        check("Don't post ads that overpay", self.var_skip)
         self.var_pick = tk.BooleanVar(value=vm.strategy == "pick")
-        ttk.Checkbutton(b, text="Smart pick: post high-demand ads more often", variable=self.var_pick).grid(row=row, column=0, columnspan=2, sticky="w")
-        row += 1
+        check("Smart pick: post high-demand ads more often", self.var_pick)
 
-        foot = ttk.Frame(b)
-        foot.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(16, 0))
-        ttk.Button(foot, text="Save", style="Accent.TButton", width=12, command=self._save).pack(side="right")
-        ttk.Button(foot, text="Cancel", width=12, command=self.destroy).pack(side="right", padx=8)
+        ttk.Separator(b).grid(row=row, column=0, columnspan=2, sticky="ew", pady=14)
+        self.footer(b, "Save", self._save).grid(row=row + 1, column=0, columnspan=2, sticky="ew")
         self.show()
 
     def _save(self) -> None:
@@ -467,15 +488,19 @@ class SettingsDialog(Dialog):
 class HelpDialog(Dialog):
     def __init__(self, app: "App"):
         super().__init__(app, "How to use")
-        text = tk.Text(self.body, width=78, height=34, wrap="word", relief="flat", font=("Segoe UI", 10),
-                       padx=8, pady=8, **app.text_colors)
+        box = ttk.Frame(self.body)
+        box.pack(fill="both", expand=True)
+        text = tk.Text(box, width=80, height=30, wrap="word", font=theme.FONT, padx=14, pady=12,
+                       **theme.text_widget_options())
+        bar = ttk.Scrollbar(box, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=bar.set)
         text.insert("1.0", HELP_TEXT)
         text.config(state="disabled")
-        text.pack(fill="both", expand=True)
-        foot = ttk.Frame(self.body)
-        foot.pack(fill="x", pady=(10, 0))
+        text.pack(side="left", fill="both", expand=True)
+        bar.pack(side="right", fill="y")
+        foot = self.footer(self.body, "Got it", self.destroy, cancel=False)
         ttk.Button(foot, text="Open GitHub page", command=lambda: webbrowser.open(REPO_URL)).pack(side="left")
-        ttk.Button(foot, text="Close", style="Accent.TButton", width=12, command=self.destroy).pack(side="right")
+        foot.pack(fill="x", pady=(16, 0))
         self.show()
 
 
@@ -486,13 +511,9 @@ class App(tk.Tk):
         self.withdraw()
         self.title(APP_NAME)
         set_app_icon(self)
-        self.geometry("900x720")
-        self.minsize(760, 600)
-        dark = apply_theme(self)
-        self.text_colors = ({"bg": "#1c1c1c", "fg": "#e6e6e6", "insertbackground": "#e6e6e6"} if dark
-                            else {"bg": "#fafafa", "fg": "#1a1a1a", "insertbackground": "#1a1a1a"})
-        self.colors = {"ok": "#3fb950" if dark else "#1a7f37", "bad": "#f85149" if dark else "#cf222e",
-                       "warn": "#d29922" if dark else "#9a6700", "muted": "#8b949e" if dark else "#6e7781"}
+        theme.apply_theme(self)
+        self.geometry("960x780")
+        self.minsize(820, 660)
 
         self.log_queue: queue.Queue = queue.Queue()
         self.events: queue.Queue = queue.Queue()
@@ -514,6 +535,7 @@ class App(tk.Tk):
         threading.Thread(target=self._load_catalog, daemon=True).start()
         self.after(100, self._poll)
         self.after(500, self._tick)
+        theme.dark_title_bar(self)
         self.deiconify()
         if not self.cfg.roblox_user_id and not self.cfg.ads:
             self.after(300, lambda: HelpDialog(self))
@@ -532,89 +554,111 @@ class App(tk.Tk):
 
     # ---- layout --------------------------------------------------------
     def _build(self) -> None:
-        root = ttk.Frame(self, padding=(16, 12, 16, 12))
+        root = ttk.Frame(self, style="App.TFrame", padding=(22, 18, 22, 20))
         root.pack(fill="both", expand=True)
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(2, weight=1)
-        root.rowconfigure(4, weight=1)
+        root.rowconfigure(2, weight=3)
+        root.rowconfigure(4, weight=2)
 
         # Header
-        head = ttk.Frame(root)
-        head.grid(row=0, column=0, sticky="ew", pady=(0, 12))
-        ttk.Label(head, text=APP_NAME, font=("Segoe UI", 18, "bold")).pack(side="left")
-        ttk.Button(head, text="Help", command=lambda: HelpDialog(self)).pack(side="right")
-        ttk.Button(head, text="Settings", command=lambda: SettingsDialog(self)).pack(side="right", padx=8)
+        head = ttk.Frame(root, style="App.TFrame")
+        head.grid(row=0, column=0, sticky="ew", pady=(0, 16))
+        png = resource_path("assets/icon.png")
+        if png.exists():
+            self._logo = tk.PhotoImage(file=str(png)).subsample(7)
+            ttk.Label(head, image=self._logo, style="App.TLabel").pack(side="left", padx=(0, 12))
+        titles = ttk.Frame(head, style="App.TFrame")
+        titles.pack(side="left")
+        ttk.Label(titles, text=APP_NAME, style="AppTitle.TLabel").pack(anchor="w")
+        ttk.Label(titles, text=f"Automatic Rolimons trade ads  ·  v{__version__}", style="AppMuted.TLabel").pack(anchor="w")
+        ttk.Button(head, text="Help", style="Ghost.TButton", command=lambda: HelpDialog(self)).pack(side="right")
+        ttk.Button(head, text="Settings", style="Ghost.TButton", command=lambda: SettingsDialog(self)).pack(side="right", padx=(0, 4))
 
         # Account
-        acc = ttk.LabelFrame(root, text=" Account ", padding=12)
+        acc = card(root, "Account")
         acc.grid(row=1, column=0, sticky="ew")
-        acc.columnconfigure(4, weight=1)
-        ttk.Label(acc, text="Roblox user ID").grid(row=0, column=0, sticky="w")
+        grid = ttk.Frame(acc)
+        grid.pack(fill="x")
+        grid.columnconfigure(1, weight=1)
+        ttk.Label(grid, text="ROBLOX USER ID", style="Field.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(grid, text="ROLIMONS COOKIE", style="Field.TLabel").grid(row=0, column=1, sticky="w", padx=(32, 0))
+        uid_row = ttk.Frame(grid)
+        uid_row.grid(row=1, column=0, sticky="w", pady=(4, 0))
         self.var_user = tk.StringVar(value=str(self.cfg.roblox_user_id or ""))
-        user = ttk.Entry(acc, textvariable=self.var_user, width=22)
-        user.grid(row=0, column=1, padx=(8, 4))
+        user = ttk.Entry(uid_row, textvariable=self.var_user, width=20)
+        user.pack(side="left")
         user.bind("<FocusOut>", lambda _e: self._save_user_id())
         user.bind("<Return>", lambda _e: self._save_user_id())
-        self.user_status = ttk.Label(acc, text="")
-        self.user_status.grid(row=0, column=2, padx=(0, 24), sticky="w")
-        ttk.Label(acc, text="Rolimons cookie").grid(row=0, column=3, sticky="e")
-        self.cookie_status = ttk.Label(acc, text="")
-        self.cookie_status.grid(row=0, column=4, padx=8, sticky="w")
-        ttk.Button(acc, text="Set cookie", command=lambda: CookieDialog(self)).grid(row=0, column=5)
+        self.user_status = ttk.Label(uid_row, text="")
+        self.user_status.pack(side="left", padx=(10, 0))
+        cookie_row = ttk.Frame(grid)
+        cookie_row.grid(row=1, column=1, sticky="ew", padx=(32, 0), pady=(4, 0))
+        self.cookie_status = ttk.Label(cookie_row, text="")
+        self.cookie_status.pack(side="left")
+        ttk.Button(cookie_row, text="Set cookie", command=lambda: CookieDialog(self)).pack(side="right")
 
         # Ads
-        ads = ttk.LabelFrame(root, text=" Your ads ", padding=12)
-        ads.grid(row=2, column=0, sticky="nsew", pady=12)
-        ads.columnconfigure(0, weight=1)
-        ads.rowconfigure(0, weight=1)
-        self.tree = ttk.Treeview(ads, columns=("name", "on", "offer", "want"), show="headings", height=6, selectmode="browse")
-        self.tree.heading("name", text="Ad", anchor="w")
-        self.tree.heading("on", text="On")
-        self.tree.heading("offer", text="Offering", anchor="w")
-        self.tree.heading("want", text="Wants", anchor="w")
-        self.tree.column("name", width=200)
-        self.tree.column("on", width=44, anchor="center", stretch=False)
-        self.tree.column("offer", width=260)
-        self.tree.column("want", width=260)
-        self.tree.grid(row=0, column=0, sticky="nsew")
+        ads = card(root, "Your ads")
+        ads.grid(row=2, column=0, sticky="nsew", pady=14)
+        self.ads_count = ttk.Label(ads.head, text="", style="Muted.TLabel")
+        self.ads_count.pack(side="left", padx=(10, 0), pady=(3, 0))
+        ttk.Button(ads.head, text="+  New ad", style="Accent.TButton", command=self._new_ad).pack(side="right")
+        wrap, self.tree = scrolled_tree(ads, ("name", "on", "offer", "want"), 6)
+        self.tree.heading("name", text="AD", anchor="w")
+        self.tree.heading("on", text="STATUS", anchor="w")
+        self.tree.heading("offer", text="OFFERING", anchor="w")
+        self.tree.heading("want", text="WANTS", anchor="w")
+        self.tree.column("name", width=210)
+        self.tree.column("on", width=80, stretch=False)
+        self.tree.column("offer", width=250)
+        self.tree.column("want", width=250)
+        wrap.pack(fill="both", expand=True)
         self.tree.bind("<Double-1>", lambda _e: self._edit_ad())
         self.tree.bind("<Delete>", lambda _e: self._delete_ad())
-        self.empty_hint = ttk.Label(ads, text='No ads yet. Click "New ad" to make one.', foreground=self.colors["muted"])
-        btns = ttk.Frame(ads)
-        btns.grid(row=0, column=1, sticky="n", padx=(12, 0))
-        for text, cmd, style in (("New ad", self._new_ad, "Accent.TButton"), ("Edit", self._edit_ad, "TButton"),
-                                 ("On / Off", self._toggle_ad, "TButton"), ("Move up", lambda: self._move(-1), "TButton"),
-                                 ("Move down", lambda: self._move(1), "TButton"), ("Delete", self._delete_ad, "TButton")):
-            ttk.Button(btns, text=text, command=cmd, style=style, width=12).pack(fill="x", pady=(0, 6))
+        self.empty_hint = ttk.Label(wrap, text='No ads yet — click "+ New ad" to make one.',
+                                    style="Muted.TLabel", background=theme.FIELD)
+        tools = ttk.Frame(ads)
+        tools.pack(fill="x", pady=(10, 0))
+        for text, cmd in (("Edit", self._edit_ad), ("Turn on / off", self._toggle_ad),
+                          ("Move up", lambda: self._move(-1)), ("Move down", lambda: self._move(1))):
+            ttk.Button(tools, text=text, command=cmd).pack(side="left", padx=(0, 8))
+        ttk.Button(tools, text="Delete", command=self._delete_ad).pack(side="right")
 
-        # Run
-        run = ttk.Frame(root)
+        # Status
+        run = card(root)
         run.grid(row=3, column=0, sticky="ew")
-        self.btn_run = ttk.Button(run, text="Start posting", style="Accent.TButton", width=18, command=self._toggle_run)
-        self.btn_run.pack(side="left", ipady=4)
         info = ttk.Frame(run)
-        info.pack(side="left", padx=16)
-        self.status = ttk.Label(info, text="Stopped", font=("Segoe UI", 12, "bold"))
+        info.pack(side="left", fill="x", expand=True)
+        self.status = ttk.Label(info, text="Stopped", style="Status.TLabel")
         self.status.pack(anchor="w")
-        self.substatus = ttk.Label(info, text="", foreground=self.colors["muted"])
-        self.substatus.pack(anchor="w")
+        self.substatus = ttk.Label(info, text="", style="Muted.TLabel")
+        self.substatus.pack(anchor="w", pady=(2, 0))
+        self.btn_run = ttk.Button(run, text="Start posting", style="Big.Accent.TButton", command=self._toggle_run)
+        self.btn_run.pack(side="right")
 
-        # Log
-        logf = ttk.LabelFrame(root, text=" Activity ", padding=8)
-        logf.grid(row=4, column=0, sticky="nsew", pady=(12, 0))
-        self.logbox = ScrolledText(logf, height=8, state="disabled", font=("Consolas", 9), wrap="word",
-                                   relief="flat", **self.text_colors)
-        self.logbox.pack(fill="both", expand=True)
-        self.logbox.tag_config("warn", foreground=self.colors["warn"])
-        self.logbox.tag_config("error", foreground=self.colors["bad"])
-        self.logbox.tag_config("ok", foreground=self.colors["ok"])
+        # Activity
+        logf = card(root, "Activity")
+        logf.grid(row=4, column=0, sticky="nsew", pady=(14, 0))
+        ttk.Button(logf.head, text="Clear", command=self._clear_log).pack(side="right")
+        box = ttk.Frame(logf)
+        box.pack(fill="both", expand=True)
+        self.logbox = tk.Text(box, height=7, state="disabled", font=theme.FONT_MONO, wrap="word", padx=10, pady=8,
+                              **theme.text_widget_options())
+        bar = ttk.Scrollbar(box, orient="vertical", command=self.logbox.yview)
+        self.logbox.configure(yscrollcommand=bar.set)
+        self.logbox.pack(side="left", fill="both", expand=True)
+        bar.pack(side="right", fill="y")
+        self.logbox.tag_config("time", foreground=theme.MUTED)
+        self.logbox.tag_config("warn", foreground=C["warn"])
+        self.logbox.tag_config("error", foreground=C["bad"])
+        self.logbox.tag_config("ok", foreground=C["ok"])
 
     # ---- account -------------------------------------------------------
     def _save_user_id(self) -> None:
         text = self.var_user.get()
         uid = parse_user_id(text)
         if text.strip() and uid is None:
-            self.user_status.config(text="Numbers only", foreground=self.colors["bad"])
+            self.user_status.config(text="Numbers only", foreground=C["bad"])
             return
         uid = uid or 0
         if uid != self.cfg.roblox_user_id:
@@ -625,7 +669,7 @@ class App(tk.Tk):
 
     def _update_user_status(self) -> None:
         ok = self.cfg.roblox_user_id > 0
-        self.user_status.config(text="✓" if ok else "Required", foreground=self.colors["ok" if ok else "bad"])
+        self.user_status.config(text="✓" if ok else "Required", foreground=C["ok" if ok else "bad"])
 
     def update_cookie_status(self) -> None:
         try:
@@ -636,13 +680,13 @@ class App(tk.Tk):
         if not cookie:
             text, color = "Not set", "bad"
         elif info and info.expired:
-            text, color = "Expired - set a new one", "bad"
+            text, color = "Expired — set a new one", "bad"
         elif info and info.expires_at:
-            who = f"{info.player_name}, " if info.player_name else ""
-            text, color = f"✓ {who}expires {time.strftime('%d %b %Y', time.localtime(info.expires_at))}", "ok"
+            who = f"{info.player_name}  ·  " if info.player_name else ""
+            text, color = f"✓  {who}expires {time.strftime('%d %b %Y', time.localtime(info.expires_at))}", "ok"
         else:
-            text, color = "✓ Saved", "ok"
-        self.cookie_status.config(text=text, foreground=self.colors[color])
+            text, color = "✓  Saved", "ok"
+        self.cookie_status.config(text=text, foreground=C[color])
         self._update_user_status()
 
     def use_cookie_user_id(self, player_id: int) -> None:
@@ -663,13 +707,17 @@ class App(tk.Tk):
         for i, ad in enumerate(self.cfg.ads):
             offer = ", ".join(short_name(self.catalog, x) for x in ad.offer_item_ids)
             want = ", ".join([short_name(self.catalog, x) for x in ad.request_item_ids] + ad.request_tags)
-            self.tree.insert("", "end", iid=str(i), values=(ad.name, "✓" if ad.enabled else "–", offer, want))
+            tags = (("odd",) if i % 2 else ()) + (() if ad.enabled else ("off",))
+            self.tree.insert("", "end", iid=str(i), values=(ad.name, "● On" if ad.enabled else "○ Off", offer, want),
+                             tags=tags)
+        on = len(self.cfg.enabled_ads())
+        self.ads_count.config(text=f"{len(self.cfg.ads)} total  ·  {on} on" if self.cfg.ads else "")
         if self.cfg.ads:
             self.empty_hint.place_forget()
             if selected is not None:
                 self._select(min(selected, len(self.cfg.ads) - 1))
         else:
-            self.empty_hint.place(in_=self.tree, relx=0.5, rely=0.55, anchor="center")
+            self.empty_hint.place(relx=0.5, rely=0.55, anchor="center")
 
     def _selected_index(self) -> int | None:
         sel = self.tree.selection() if hasattr(self, "tree") else ()
@@ -734,7 +782,7 @@ class App(tk.Tk):
             if self.stop_event:
                 self.stop_event.set()
             self.btn_run.config(state="disabled")
-            self.status.config(text="Stopping...")
+            self.status.config(text="Stopping...", foreground=C["text"])
             return
         self._save_user_id()
         try:
@@ -780,24 +828,23 @@ class App(tk.Tk):
 
     def _set_running(self, running: bool) -> None:
         self.btn_run.config(text="Stop" if running else "Start posting", state="normal",
-                            style="TButton" if running else "Accent.TButton")
-        self.status.config(text="Running" if running else "Stopped",
-                           foreground=self.colors["ok"] if running else "")
+                            style="Big.TButton" if running else "Big.Accent.TButton")
+        self.status.config(text="Starting..." if running else "Stopped", foreground=C["text"])
 
     def _tick(self) -> None:
         poster = self.poster
-        count = f"Ads posted in the last 24h: {self.history.count_24h()} / {self.cfg.max_ads_per_24h}"
+        count = f"{self.history.count_24h()} of {self.cfg.max_ads_per_24h} ads posted in the last 24 hours"
         if poster and poster.wait_until:
             remaining = max(0, poster.wait_until - time.time())
-            self.status.config(text=f"Next ad in {fmt_duration(remaining)}")
+            self.status.config(text=f"Next ad in {fmt_duration(remaining)}", foreground=C["accent"])
             self.substatus.config(text=f"{poster.status_text.capitalize()}  ·  {count}")
         elif poster:
-            self.status.config(text=poster.status_text)
+            self.status.config(text=poster.status_text, foreground=C["accent"])
             self.substatus.config(text=count)
         elif self.worker and self.worker.is_alive():
-            self.status.config(text="Checking setup...")
+            self.status.config(text="Checking setup...", foreground=C["text"])
         else:
-            self.substatus.config(text=count)
+            self.substatus.config(text=f"Ready when you are  ·  {count}")
         self.after(500, self._tick)
 
     # ---- background events --------------------------------------------
@@ -806,6 +853,11 @@ class App(tk.Tk):
             self.events.put(("catalog", fetch_catalog_with_retry(requests.Session())))
         except StartupError as e:
             log.warning("%s", e)
+
+    def _clear_log(self) -> None:
+        self.logbox.config(state="normal")
+        self.logbox.delete("1.0", "end")
+        self.logbox.config(state="disabled")
 
     def _poll(self) -> None:
         lines = []
@@ -819,7 +871,10 @@ class App(tk.Tk):
             for level, text in lines:
                 tag = ("error" if level >= logging.ERROR else "warn" if level >= logging.WARNING
                        else "ok" if "result=SUCCESS" in text else "")
-                self.logbox.insert("end", text + "\n", tag)
+                stamp, _, rest = text.partition(" | ")
+                _, _, message = rest.partition(" | ")
+                self.logbox.insert("end", stamp[11:] + "  ", "time")
+                self.logbox.insert("end", (message or text) + "\n", tag)
             if int(self.logbox.index("end-1c").split(".")[0]) > 3000:
                 self.logbox.delete("1.0", "1000.0")
             self.logbox.see("end")

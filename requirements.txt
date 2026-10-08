@@ -1,2 +1,1 @@
 requests>=2.31
-sv-ttk>=2.6

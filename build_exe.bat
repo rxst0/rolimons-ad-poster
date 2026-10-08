@@ -5,8 +5,8 @@ setlocal
 cd /d "%~dp0"
 if not exist .venv\Scripts\python.exe python -m venv .venv || goto :fail
 .venv\Scripts\python -m pip install -q -r requirements.txt pyinstaller || goto :fail
-.venv\Scripts\python -m PyInstaller --noconfirm --clean --onefile --windowed --collect-data sv_ttk ^
-    --icon assets\icon.ico --add-data "assets\icon.ico;assets" --name RoliAdPoster gui.py || goto :fail
+.venv\Scripts\python -m PyInstaller --noconfirm --clean --onefile --windowed ^
+    --icon assets\icon.ico --add-data "assets\icon.ico;assets" --add-data "assets\icon.png;assets" --name RoliAdPoster gui.py || goto :fail
 .venv\Scripts\python -m PyInstaller --noconfirm --clean --onefile --console ^
     --icon assets\icon.ico --name RoliAdPosterCLI main.py || goto :fail
 

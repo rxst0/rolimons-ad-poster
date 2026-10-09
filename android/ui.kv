@@ -1,0 +1,720 @@
+#:import hex kivy.utils.get_color_from_hex
+#:import dp kivy.metrics.dp
+#:import sp kivy.metrics.sp
+#:import SlideTransition kivy.uix.screenmanager.SlideTransition
+
+#:set BG hex('#15181d')
+#:set SURFACE hex('#1d2127')
+#:set RAISED hex('#262b33')
+#:set FIELD hex('#22272e')
+#:set BORDER hex('#323843')
+#:set HOVER hex('#2e3540')
+#:set TEXT hex('#e6e9ee')
+#:set MUTED hex('#8b94a3')
+#:set ACCENT hex('#3b82f6')
+#:set ACCENT_PRESSED hex('#2563eb')
+#:set BANNER hex('#1e3a8a')
+#:set WARN hex('#fbbf24')
+#:set BAD hex('#f87171')
+#:set OK hex('#4ade80')
+
+# ---- building blocks ---------------------------------------------------------
+<Txt@Label>:
+    color: TEXT
+    font_size: sp(15)
+    size_hint_y: None
+    height: self.texture_size[1]
+    text_size: self.width, None
+    halign: 'left'
+    valign: 'middle'
+    markup: True
+
+<Muted@Txt>:
+    color: MUTED
+    font_size: sp(13)
+
+<FieldLabel@Txt>:
+    color: MUTED
+    font_size: sp(12)
+    bold: True
+
+<Title@Txt>:
+    font_size: sp(18)
+    bold: True
+
+<Card@BoxLayout>:
+    orientation: 'vertical'
+    padding: dp(16)
+    spacing: dp(10)
+    size_hint_y: None
+    height: self.minimum_height
+    canvas.before:
+        Color:
+            rgba: BORDER
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(14)]
+        Color:
+            rgba: SURFACE
+        RoundedRectangle:
+            pos: self.x + dp(1), self.y + dp(1)
+            size: self.width - dp(2), self.height - dp(2)
+            radius: [dp(13)]
+
+<FlatButton>:
+    size_hint_y: None
+    height: dp(46)
+    font_size: sp(15)
+    color: TEXT
+    bg: RAISED
+    bg_down: HOVER
+    opacity: 0.45 if self.disabled else 1
+    canvas.before:
+        Color:
+            rgba: self.bg_down if self.state == 'down' else self.bg
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(10)]
+
+<AccentButton@FlatButton>:
+    bg: ACCENT
+    bg_down: ACCENT_PRESSED
+    color: 1, 1, 1, 1
+    bold: True
+
+<GhostButton@FlatButton>:
+    bg: 0, 0, 0, 0
+    bg_down: RAISED
+    size_hint_x: None
+    width: self.texture_size[0] + dp(24)
+
+<Chip>:
+    size_hint_y: None
+    height: dp(38)
+    font_size: sp(14)
+    color: (1, 1, 1, 1) if self.selected else TEXT
+    canvas.before:
+        Color:
+            rgba: ACCENT if self.selected else FIELD
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(19)]
+
+<Switchy>:
+    size_hint: None, None
+    size: dp(50), dp(30)
+    canvas:
+        Color:
+            rgba: ACCENT if self.active else BORDER
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(15)]
+        Color:
+            rgba: 1, 1, 1, 1
+        Ellipse:
+            pos: (self.right - dp(26), self.y + dp(4)) if self.active else (self.x + dp(4), self.y + dp(4))
+            size: dp(22), dp(22)
+
+<SettingRow>:
+    size_hint_y: None
+    height: max(dp(48), lbl.texture_size[1] + dp(16))
+    spacing: dp(12)
+    Txt:
+        id: lbl
+        text: root.text
+        size_hint_y: None
+        height: self.texture_size[1]
+        pos_hint: {'center_y': 0.5}
+    Switchy:
+        active: root.active
+        on_active: root.active = self.active
+        pos_hint: {'center_y': 0.5}
+
+<Field@TextInput>:
+    background_normal: ''
+    background_active: ''
+    background_color: FIELD
+    foreground_color: TEXT
+    cursor_color: ACCENT
+    hint_text_color: MUTED
+    padding: dp(12), dp(13)
+    size_hint_y: None
+    height: dp(48)
+    multiline: False
+    font_size: sp(15)
+    write_tab: False
+
+<TopBar@BoxLayout>:
+    title: ''
+    show_back: True
+    size_hint_y: None
+    height: dp(58)
+    padding: dp(6), dp(6), dp(12), dp(6)
+    spacing: dp(4)
+    canvas.before:
+        Color:
+            rgba: SURFACE
+        Rectangle:
+            pos: self.pos
+            size: self.size
+    GhostButton:
+        text: '‹  Back' if root.show_back else ''
+        disabled: not root.show_back
+        opacity: 1 if root.show_back else 0
+        on_release: app.go_back()
+    Label:
+        text: root.title
+        bold: True
+        font_size: sp(18)
+        color: TEXT
+        text_size: self.size
+        halign: 'left'
+        valign: 'middle'
+
+<ItemRow>:
+    size_hint_y: None
+    height: dp(56)
+    spacing: dp(10)
+    padding: dp(8), dp(6)
+    canvas.before:
+        Color:
+            rgba: (hex('#3a2f12') if root.warn else FIELD)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(10)]
+    Image:
+        source: root.thumb
+        size_hint: None, None
+        size: dp(40), dp(40)
+        pos_hint: {'center_y': 0.5}
+        opacity: 1 if root.thumb else 0
+    BoxLayout:
+        orientation: 'vertical'
+        padding: 0, dp(4)
+        Label:
+            text: root.name
+            color: WARN if root.warn else TEXT
+            font_size: sp(15)
+            text_size: self.size
+            halign: 'left'
+            valign: 'middle'
+            shorten: True
+            shorten_from: 'right'
+        Label:
+            text: root.value
+            markup: True
+            color: MUTED
+            font_size: sp(13)
+            text_size: self.size
+            halign: 'left'
+            valign: 'middle'
+    BoxLayout:
+        id: actions
+        size_hint_x: None
+        width: self.minimum_width
+        spacing: dp(6)
+
+<AdCard>:
+    orientation: 'horizontal'
+    size_hint_y: None
+    height: dp(84)
+    padding: dp(14), dp(10)
+    spacing: dp(12)
+    canvas.before:
+        Color:
+            rgba: HOVER if self.state == 'down' else FIELD
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(12)]
+    BoxLayout:
+        orientation: 'vertical'
+        spacing: dp(2)
+        Label:
+            text: root.title
+            bold: True
+            color: TEXT if root.active else MUTED
+            font_size: sp(16)
+            text_size: self.size
+            halign: 'left'
+            valign: 'middle'
+            shorten: True
+        Label:
+            text: root.summary
+            color: MUTED
+            font_size: sp(13)
+            text_size: self.size
+            halign: 'left'
+            valign: 'middle'
+            shorten: True
+        Label:
+            text: root.badge
+            color: WARN if root.warned else (OK if root.active else MUTED)
+            font_size: sp(12)
+            text_size: self.size
+            halign: 'left'
+            valign: 'middle'
+    Switchy:
+        active: root.active
+        on_active: root.dispatch('on_toggle', self.active)
+        pos_hint: {'center_y': 0.5}
+
+<Notice>:
+    size_hint: 0.9, None
+    height: box.minimum_height
+    background: ''
+    background_color: 0, 0, 0, 0.6
+    overlay_color: 0, 0, 0, 0.6
+    BoxLayout:
+        id: box
+        orientation: 'vertical'
+        padding: dp(20)
+        spacing: dp(16)
+        size_hint_y: None
+        height: self.minimum_height
+        canvas.before:
+            Color:
+                rgba: SURFACE
+            RoundedRectangle:
+                pos: self.pos
+                size: self.size
+                radius: [dp(16)]
+        Title:
+            text: root.title
+        Txt:
+            text: root.message
+            color: MUTED
+        BoxLayout:
+            id: buttons
+            size_hint_y: None
+            height: dp(46)
+            spacing: dp(10)
+
+# ---- screens -------------------------------------------------------------------
+<HomeScreen>:
+    name: 'home'
+    BoxLayout:
+        orientation: 'vertical'
+        canvas.before:
+            Color:
+                rgba: BG
+            Rectangle:
+                pos: self.pos
+                size: self.size
+        BoxLayout:
+            size_hint_y: None
+            height: dp(64)
+            padding: dp(16), dp(10), dp(8), dp(10)
+            spacing: dp(10)
+            Image:
+                source: app.icon_path
+                size_hint: None, None
+                size: dp(36), dp(36)
+                pos_hint: {'center_y': 0.5}
+            Label:
+                text: 'Rolimons Ad Poster'
+                bold: True
+                font_size: sp(19)
+                color: TEXT
+                text_size: self.size
+                halign: 'left'
+                valign: 'middle'
+            GhostButton:
+                text: 'History'
+                font_size: sp(14)
+                on_release: app.show('history')
+            GhostButton:
+                text: 'Settings'
+                font_size: sp(14)
+                on_release: app.show('settings')
+        ScrollView:
+            do_scroll_x: False
+            BoxLayout:
+                orientation: 'vertical'
+                padding: dp(14), dp(4), dp(14), dp(24)
+                spacing: dp(14)
+                size_hint_y: None
+                height: self.minimum_height
+
+                BoxLayout:
+                    id: banner
+                    orientation: 'vertical'
+                    size_hint_y: None
+                    height: self.minimum_height if app.update_text else 0
+                    opacity: 1 if app.update_text else 0
+                    padding: dp(16)
+                    spacing: dp(10)
+                    canvas.before:
+                        Color:
+                            rgba: BANNER if app.update_text else (0, 0, 0, 0)
+                        RoundedRectangle:
+                            pos: self.pos
+                            size: self.size
+                            radius: [dp(14)]
+                    Txt:
+                        text: app.update_text
+                        bold: True
+                    AccentButton:
+                        text: 'Download update'
+                        disabled: not app.update_text
+                        on_release: app.open_update()
+
+                Card:
+                    Txt:
+                        text: app.status_title
+                        font_size: sp(26)
+                        bold: True
+                        color: ACCENT if app.running else TEXT
+                    Muted:
+                        text: app.status_detail
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(52)
+                        spacing: dp(10) if app.running else 0
+                        FlatButton:
+                            text: 'Skip' if app.running else ''
+                            size_hint_x: 0.35 if app.running else 0.0001
+                            height: dp(52)
+                            opacity: 1 if app.running else 0
+                            on_release: app.skip() if app.running else None
+                        AccentButton:
+                            text: 'Stop' if app.running else 'Start posting'
+                            height: dp(52)
+                            font_size: sp(17)
+                            bg: RAISED if app.running else ACCENT
+                            bg_down: HOVER if app.running else ACCENT_PRESSED
+                            on_release: app.toggle_run()
+
+                Card:
+                    Title:
+                        text: 'Account'
+                    FieldLabel:
+                        text: 'ROLIMONS COOKIE'
+                    Txt:
+                        text: app.cookie_text
+                        color: {'ok': OK, 'warn': WARN, 'bad': BAD}[app.cookie_state]
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(46)
+                        spacing: dp(10) if app.can_sign_in else 0
+                        AccentButton:
+                            text: 'Sign in to Rolimons' if app.can_sign_in else ''
+                            opacity: 1 if app.can_sign_in else 0
+                            size_hint_x: 1 if app.can_sign_in else 0.0001
+                            on_release: app.sign_in() if app.can_sign_in else None
+                        FlatButton:
+                            text: 'Paste cookie'
+                            on_release: app.show('cookie')
+
+                BoxLayout:
+                    size_hint_y: None
+                    height: dp(46)
+                    spacing: dp(10)
+                    Label:
+                        text: 'Your ads   [size=' + str(int(sp(13))) + '][color=#8b94a3]' + app.ads_count + '[/color][/size]'
+                        markup: True
+                        bold: True
+                        font_size: sp(18)
+                        color: TEXT
+                        text_size: self.size
+                        halign: 'left'
+                        valign: 'middle'
+                    AccentButton:
+                        text: '+  New ad'
+                        size_hint_x: None
+                        width: dp(120)
+                        on_release: app.new_ad()
+
+                BoxLayout:
+                    id: ads_box
+                    orientation: 'vertical'
+                    spacing: dp(10)
+                    size_hint_y: None
+                    height: self.minimum_height
+
+                Muted:
+                    text: 'No ads yet. Tap "+ New ad" to make one.' if not app.ads_count else ''
+                    halign: 'center'
+
+<EditScreen>:
+    name: 'edit'
+    BoxLayout:
+        orientation: 'vertical'
+        canvas.before:
+            Color:
+                rgba: BG
+            Rectangle:
+                pos: self.pos
+                size: self.size
+        TopBar:
+            title: 'Edit ad'
+        ScrollView:
+            id: scroll
+            do_scroll_x: False
+            BoxLayout:
+                orientation: 'vertical'
+                padding: dp(14), dp(12), dp(14), dp(30)
+                spacing: dp(12)
+                size_hint_y: None
+                height: self.minimum_height
+                FieldLabel:
+                    text: 'AD NAME'
+                Field:
+                    id: name
+                SettingRow:
+                    id: enabled
+                    text: 'Include in rotation'
+                Title:
+                    text: 'You offer'
+                Muted:
+                    text: 'Up to 4 items'
+                BoxLayout:
+                    id: offer_box
+                    orientation: 'vertical'
+                    spacing: dp(8)
+                    size_hint_y: None
+                    height: self.minimum_height
+                Txt:
+                    id: owned_hint
+                    color: WARN
+                    font_size: sp(13)
+                Title:
+                    text: 'You want'
+                Muted:
+                    text: 'Up to 4 items and tags combined'
+                BoxLayout:
+                    id: want_box
+                    orientation: 'vertical'
+                    spacing: dp(8)
+                    size_hint_y: None
+                    height: self.minimum_height
+                FieldLabel:
+                    text: 'TAGS'
+                GridLayout:
+                    id: tags
+                    cols: 3
+                    spacing: dp(8)
+                    size_hint_y: None
+                    height: self.minimum_height
+                Muted:
+                    id: summary
+                Title:
+                    text: 'Add items'
+                Field:
+                    id: search
+                    hint_text: 'Search by name, acronym or ID'
+                    on_text: root.schedule_search()
+                BoxLayout:
+                    id: results
+                    orientation: 'vertical'
+                    spacing: dp(8)
+                    size_hint_y: None
+                    height: self.minimum_height
+                Widget:
+                    size_hint_y: None
+                    height: dp(8)
+                AccentButton:
+                    text: 'Save ad'
+                    on_release: root.save()
+                FlatButton:
+                    text: 'Delete ad'
+                    color: BAD
+                    opacity: 1 if root.index >= 0 else 0
+                    disabled: root.index < 0
+                    on_release: root.delete()
+
+<SettingsScreen>:
+    name: 'settings'
+    BoxLayout:
+        orientation: 'vertical'
+        canvas.before:
+            Color:
+                rgba: BG
+            Rectangle:
+                pos: self.pos
+                size: self.size
+        TopBar:
+            title: 'Settings'
+        ScrollView:
+            do_scroll_x: False
+            BoxLayout:
+                orientation: 'vertical'
+                padding: dp(14), dp(12), dp(14), dp(30)
+                spacing: dp(12)
+                size_hint_y: None
+                height: self.minimum_height
+                Card:
+                    Title:
+                        text: 'Posting'
+                    FieldLabel:
+                        text: 'AD ORDER'
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(40)
+                        spacing: dp(8)
+                        Chip:
+                            id: order_seq
+                            text: 'In order'
+                            on_release: root.set_order('sequential')
+                        Chip:
+                            id: order_rand
+                            text: 'Random'
+                            on_release: root.set_order('random')
+                    FieldLabel:
+                        text: 'EXTRA RANDOM DELAY (SECONDS)'
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(48)
+                        spacing: dp(10)
+                        Field:
+                            id: jmin
+                            input_filter: 'int'
+                        Label:
+                            text: 'to'
+                            color: MUTED
+                            size_hint_x: None
+                            width: dp(24)
+                        Field:
+                            id: jmax
+                            input_filter: 'int'
+                    FieldLabel:
+                        text: 'MAX ADS PER 24 HOURS'
+                    Field:
+                        id: max_ads
+                        input_filter: 'int'
+                    SettingRow:
+                        id: skip_unowned
+                        text: "Skip ads offering items I don't own"
+                Card:
+                    Title:
+                        text: 'Schedule'
+                    SettingRow:
+                        id: hours_on
+                        text: 'Only post during these hours'
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(48)
+                        spacing: dp(10)
+                        Field:
+                            id: hstart
+                            hint_text: '09:00'
+                        Label:
+                            text: 'to'
+                            color: MUTED
+                            size_hint_x: None
+                            width: dp(24)
+                        Field:
+                            id: hend
+                            hint_text: '23:00'
+                Card:
+                    Title:
+                        text: 'Value checks'
+                    SettingRow:
+                        id: value_on
+                        text: 'Warn me when an ad overpays'
+                    FieldLabel:
+                        text: 'OVERPAY THRESHOLD (%)'
+                    Field:
+                        id: overpay
+                        input_filter: 'float'
+                    SettingRow:
+                        id: skip_overpay
+                        text: "Don't post ads that overpay"
+                    SettingRow:
+                        id: smart_pick
+                        text: 'Smart pick: post high-demand ads more often'
+                Card:
+                    Title:
+                        text: 'App'
+                    SettingRow:
+                        id: notify_on
+                        text: 'Show notifications'
+                    SettingRow:
+                        id: updates_on
+                        text: 'Check for updates'
+                    Muted:
+                        text: root.battery_text
+                    FlatButton:
+                        text: 'Allow running in the background'
+                        opacity: 1 if root.battery_text else 0
+                        disabled: not root.battery_text
+                        on_release: root.request_battery()
+                AccentButton:
+                    text: 'Save settings'
+                    on_release: root.save()
+
+<HistoryScreen>:
+    name: 'history'
+    BoxLayout:
+        orientation: 'vertical'
+        canvas.before:
+            Color:
+                rgba: BG
+            Rectangle:
+                pos: self.pos
+                size: self.size
+        TopBar:
+            title: 'History'
+        ScrollView:
+            do_scroll_x: False
+            BoxLayout:
+                orientation: 'vertical'
+                padding: dp(14), dp(12), dp(14), dp(30)
+                spacing: dp(10)
+                size_hint_y: None
+                height: self.minimum_height
+                Muted:
+                    id: summary
+                BoxLayout:
+                    id: attempts
+                    orientation: 'vertical'
+                    spacing: dp(8)
+                    size_hint_y: None
+                    height: self.minimum_height
+                Title:
+                    text: 'Activity'
+                Label:
+                    id: activity
+                    font_name: 'RobotoMono-Regular'
+                    font_size: sp(11)
+                    color: MUTED
+                    size_hint_y: None
+                    height: self.texture_size[1]
+                    text_size: self.width, None
+
+<CookieScreen>:
+    name: 'cookie'
+    BoxLayout:
+        orientation: 'vertical'
+        canvas.before:
+            Color:
+                rgba: BG
+            Rectangle:
+                pos: self.pos
+                size: self.size
+        TopBar:
+            title: 'Paste cookie'
+        ScrollView:
+            do_scroll_x: False
+            BoxLayout:
+                orientation: 'vertical'
+                padding: dp(14), dp(12), dp(14), dp(30)
+                spacing: dp(12)
+                size_hint_y: None
+                height: self.minimum_height
+                Muted:
+                    text: 'Easiest: go back and tap "Sign in to Rolimons".\n\nOr copy your _RoliVerification cookie on a PC (rolimons.com > F12 > Application > Cookies) and paste it here. Copying the whole row also works.\n\nThis is NOT your Roblox password or .ROBLOSECURITY. Never share it.'
+                FieldLabel:
+                    text: 'COOKIE'
+                Field:
+                    id: cookie
+                    password: True
+                    hint_text: 'eyJ...'
+                AccentButton:
+                    text: 'Save cookie'
+                    on_release: root.save()

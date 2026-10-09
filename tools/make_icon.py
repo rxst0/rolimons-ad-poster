@@ -33,6 +33,10 @@ def main() -> None:
     out = Path(__file__).resolve().parent.parent / "assets" / "icon.ico"
     img.save(out, sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
     img.resize((256, 256), Image.LANCZOS).save(out.with_name("icon.png"))
+    img.resize((512, 512), Image.LANCZOS).save(out.with_name("icon-512.png"))  # Android launcher icon
+    splash = Image.new("RGBA", (1024, 1024), (21, 24, 29, 255))  # Android splash: logo on the app background
+    splash.paste(img.resize((320, 320), Image.LANCZOS), (352, 352), img.resize((320, 320), Image.LANCZOS))
+    splash.save(out.with_name("presplash.png"))
     print("wrote", out)
 
 

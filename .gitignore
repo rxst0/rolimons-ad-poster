@@ -9,3 +9,7 @@ dist/
 config.json
 *.json.tmp
 cache/
+.venv-mobile/
+android/.devdata/
+android/.buildozer/
+android/bin/

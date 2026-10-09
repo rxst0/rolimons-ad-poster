@@ -1,9 +1,15 @@
+import os
 import sys
 from pathlib import Path
 
+HOME_ENV_VAR = "ROLIPOSTER_HOME"
+
 
 def app_dir() -> Path:
-    """Folder holding config.json/.env/logs: next to the .exe when frozen, else the project root."""
+    """Folder holding config.json/.env/logs: $ROLIPOSTER_HOME (set by the Android app), next to the
+    .exe when frozen, else the project root."""
+    if os.environ.get(HOME_ENV_VAR):
+        return Path(os.environ[HOME_ENV_VAR])
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent

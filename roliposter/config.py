@@ -1,5 +1,6 @@
 """config.json loading, saving and validation."""
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -34,6 +35,21 @@ class ValueSettings:
 
 
 @dataclass
+class PostingHours:
+    enabled: bool = False
+    start: str = "09:00"  # local time, HH:MM; start > end means overnight (e.g. 18:00-02:00)
+    end: str = "23:00"
+
+
+@dataclass
+class AppSettings:
+    close_to_tray: bool = True        # keep posting in the tray when the window is closed
+    auto_start_posting: bool = False  # start posting as soon as the app opens
+    notifications: bool = True
+    check_updates: bool = True
+
+
+@dataclass
 class Config:
     roblox_user_id: int = 0
     rotation: str = "sequential"  # or "random"
@@ -41,6 +57,9 @@ class Config:
     jitter_seconds: list[float] = field(default_factory=lambda: [20.0, 120.0])
     max_ads_per_24h: int = 55
     value_mode: ValueSettings = field(default_factory=ValueSettings)
+    skip_unowned_items: bool = True
+    posting_hours: PostingHours = field(default_factory=PostingHours)
+    app: AppSettings = field(default_factory=AppSettings)
     ads: list[Ad] = field(default_factory=list)
 
     def enabled_ads(self) -> list[Ad]:
@@ -71,6 +90,8 @@ def config_from_dict(data: dict) -> Config:
                 enabled=bool(raw.get("enabled", True)),
             ))
         vm = data.get("value_mode", {}) or {}
+        ph = data.get("posting_hours", {}) or {}
+        app = data.get("app", {}) or {}
         return Config(
             roblox_user_id=int(data.get("roblox_user_id", 0) or 0),
             rotation=str(data.get("rotation", "sequential")).lower(),
@@ -82,6 +103,18 @@ def config_from_dict(data: dict) -> Config:
                 strategy=str(vm.get("strategy", "warn")).lower(),
                 overpay_warn_percent=float(vm.get("overpay_warn_percent", 25.0)),
                 skip_overpaying_ads=bool(vm.get("skip_overpaying_ads", False)),
+            ),
+            skip_unowned_items=bool(data.get("skip_unowned_items", True)),
+            posting_hours=PostingHours(
+                enabled=bool(ph.get("enabled", False)),
+                start=str(ph.get("start", "09:00")),
+                end=str(ph.get("end", "23:00")),
+            ),
+            app=AppSettings(
+                close_to_tray=bool(app.get("close_to_tray", True)),
+                auto_start_posting=bool(app.get("auto_start_posting", False)),
+                notifications=bool(app.get("notifications", True)),
+                check_updates=bool(app.get("check_updates", True)),
             ),
             ads=ads,
         )
@@ -118,6 +151,12 @@ def validate_config(cfg: Config) -> list[str]:
         errors.append("jitter_seconds must be [min, max] with 0 <= min <= max.")
     if not 1 <= cfg.max_ads_per_24h <= 96:
         errors.append("max_ads_per_24h must be between 1 and 96.")
+    if cfg.posting_hours.enabled:
+        for label, value in (("start", cfg.posting_hours.start), ("end", cfg.posting_hours.end)):
+            if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", value.strip()):
+                errors.append(f"posting_hours.{label} must be HH:MM (24-hour), got {value!r}.")
+        if cfg.posting_hours.start.strip() == cfg.posting_hours.end.strip():
+            errors.append("posting_hours start and end can't be the same time.")
     if cfg.value_mode.strategy not in ("warn", "pick"):
         errors.append('value_mode.strategy must be "warn" or "pick".')
     if not cfg.ads:

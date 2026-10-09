@@ -1,0 +1,48 @@
+name: Release
+
+# Push a tag like v1.3.0 (matching roliposter/__init__.py) to build and publish a release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check tag matches app version
+        shell: pwsh
+        run: |
+          $version = python -c "import roliposter; print(roliposter.__version__)"
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "Tag ${{ github.ref_name }} != app version v$version" }
+
+      - name: Test
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pytest -q tests
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+
+      - name: Build
+        shell: cmd
+        run: build_exe.bat
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Rolimons Ad Poster ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/RolimonsAdPosterSetup.exe
+            dist/RoliAdPoster.exe
+            dist/RoliAdPosterCLI.exe

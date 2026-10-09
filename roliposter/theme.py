@@ -15,6 +15,7 @@ ACCENT = "#3b82f6"
 ACCENT_HOVER = "#5592f7"
 ACCENT_PRESSED = "#2563eb"
 SELECT = "#2a5bd7"
+BANNER = "#1e3a8a"
 OK = "#4ade80"
 WARN = "#fbbf24"
 BAD = "#f87171"
@@ -60,6 +61,10 @@ def apply_theme(root: tk.Tk) -> None:
     style.configure("AppTitle.TLabel", background=BG, font=FONT_HEADER)
     style.configure("AppMuted.TLabel", background=BG, foreground=MUTED, font=FONT_SMALL)
     style.configure("TSeparator", background=BORDER)
+    style.configure("Warn.TLabel", foreground=WARN, font=FONT_SMALL)
+    style.configure("Banner.TFrame", background=BANNER)
+    style.configure("Banner.TLabel", background=BANNER, foreground="#ffffff", font=FONT_SEMIBOLD)
+    style.configure("BannerMuted.TLabel", background=BANNER, foreground="#c7d7fe", font=FONT_SMALL)
 
     # Buttons
     _flat(style, "TButton", RAISED, foreground=TEXT, padding=(14, 7), relief="flat", focusthickness=0)

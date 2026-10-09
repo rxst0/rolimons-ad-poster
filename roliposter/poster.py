@@ -9,8 +9,10 @@ import requests
 
 from .api import Outcome, PostResult, RolimonsClient
 from .config import Ad, Config, ConfigError, load_config, validate_config
+from .inventory import Inventory, fetch_inventory, missing_offer_items
 from .items import ItemCatalog, fetch_catalog
 from .paths import state_path
+from .schedule import seconds_until_allowed
 from .state import PostHistory
 from .values import evaluate_ad, is_overpaying, pick_weight
 
@@ -21,7 +23,9 @@ BACKOFF_MAX_SECONDS = 15 * 60
 COOLDOWN_RETRY_SECONDS = (60.0, 120.0)
 MAX_COOLDOWN_RETRIES = 20
 REJECT_PAUSE_SECONDS = 30.0
+NOTHING_POSTABLE_RECHECK_SECONDS = 10 * 60
 CATALOG_REFRESH_SECONDS = 30 * 60
+INVENTORY_REFRESH_SECONDS = 5 * 60
 
 
 class AuthError(RuntimeError):
@@ -45,12 +49,17 @@ class Poster:
         self.session = session or requests.Session()
         self.client = RolimonsClient(self.session, cookie, cfg.roblox_user_id)
         self.history = PostHistory(state_path())
+        self.inventory: Inventory | None = None
+        self.unavailable: dict[str, list[int]] = {}  # ad name -> offered item IDs you don't own
         self._config_mtime = self._mtime()
         self._seq_index = 0
         self._last_ad_name: str | None = None
-        # Read by the GUI for its status line / countdown.
+        self._lock = threading.Lock()
+        self._seen_raw: set[Outcome] = set()
+        # Read by the GUI for its status line / countdown / next-ad preview.
         self.status_text = "Starting"
         self.wait_until: float | None = None
+        self.next_ad: Ad | None = None
 
     # ---- control -------------------------------------------------------
     @property
@@ -74,6 +83,15 @@ class Poster:
             self.wait_until = None
         return not self.stopped
 
+    def skip_next(self) -> Ad | None:
+        """Replaces the planned next ad with the one after it. Safe to call from another thread."""
+        with self._lock:
+            if self.next_ad is not None:
+                self._last_ad_name = self.next_ad.name
+                self.next_ad = self._choose_ad(refresh=False)
+                log.info("Skipped ahead; next ad will be '%s'.", self.next_ad.name if self.next_ad else "none")
+            return self.next_ad
+
     # ---- main loop -----------------------------------------------------
     def run(self) -> None:
         log.info("Poster started: %d enabled ad(s), rotation=%s, value mode=%s.",
@@ -86,10 +104,16 @@ class Poster:
             while not self.stopped:
                 self._maybe_reload_config()
                 self._maybe_refresh_catalog()
-                ad = self._choose_ad()
-                if ad is None:
-                    log.error("No postable ads (all disabled or skipped). Stopping.")
+                if not self._wait_for_posting_hours():
                     return
+                ad = self._take_next_ad()
+                if ad is None:
+                    if not self.cfg.enabled_ads():
+                        log.error("No enabled ads. Stopping.")
+                        return
+                    if not self.sleep(NOTHING_POSTABLE_RECHECK_SECONDS, "every enabled ad is being skipped"):
+                        return
+                    continue
                 if not self._wait_for_quota():
                     return
                 result = self._post_with_retries(ad)
@@ -100,6 +124,7 @@ class Poster:
                     self.history.record(ad.name)
                     log.info("Posted %d ad(s) in the last 24h (cap %d).",
                              self.history.count_24h(), self.cfg.max_ads_per_24h)
+                    self._plan_next()
                     if not self.sleep(self._cooldown_with_jitter(), "cooldown before next ad"):
                         return
                 else:
@@ -107,16 +132,18 @@ class Poster:
                     if consecutive_failures >= max(1, len(self.cfg.enabled_ads())):
                         log.error("Every enabled ad failed in a row; stopping. Check the messages above.")
                         return
+                    self._plan_next()
                     if not self.sleep(REJECT_PAUSE_SECONDS, "ad not posted, moving to next ad"):
                         return
         finally:
+            self.next_ad = None
             log.info("Poster stopped.")
 
     def post_once(self) -> bool:
-        """Posts a single ad (respecting cooldown/quota). Returns True on success."""
-        if not self._wait_initial_cooldown() or not self._wait_for_quota():
+        """Posts a single ad (respecting cooldown/quota/hours). Returns True on success."""
+        if not self._wait_initial_cooldown() or not self._wait_for_quota() or not self._wait_for_posting_hours():
             return False
-        ad = self._choose_ad()
+        ad = self._take_next_ad()
         if ad is None:
             log.error("No postable ads.")
             return False
@@ -145,6 +172,13 @@ class Poster:
             return True
         return self.sleep(wait + random.uniform(10, 60), f"reached {self.cfg.max_ads_per_24h} ads in 24h")
 
+    def _wait_for_posting_hours(self) -> bool:
+        wait = seconds_until_allowed(self.cfg.posting_hours)
+        if wait <= 0:
+            return True
+        hours = self.cfg.posting_hours
+        return self.sleep(wait + random.uniform(10, 90), f"outside posting hours ({hours.start}-{hours.end})")
+
     def _backoff(self, failures: int) -> float:
         return min(BACKOFF_BASE_SECONDS * 2 ** (failures - 1), BACKOFF_MAX_SECONDS) * random.uniform(0.8, 1.2)
 
@@ -152,6 +186,11 @@ class Poster:
         level = logging.INFO if result.outcome is Outcome.SUCCESS else logging.WARNING
         http = result.status_code if result.status_code is not None else "-"
         log.log(level, "POST ad='%s' result=%s http=%s msg=%s", ad.name, result.outcome.value, http, result.message)
+        # The success and cooldown replies are undocumented; record the first of each verbatim.
+        if result.outcome in (Outcome.SUCCESS, Outcome.COOLDOWN) and result.outcome not in self._seen_raw:
+            self._seen_raw.add(result.outcome)
+            log.info("Rolimons reply (%s): %s", result.outcome.value, result.raw or "<empty>")
+        self.history.record_attempt(ad.name, result.outcome.value, result.message)
 
     def _post_with_retries(self, ad: Ad) -> PostResult | None:
         """Posts one ad, retrying through cooldown/network/server errors. None if stopped."""
@@ -184,7 +223,21 @@ class Poster:
         return None
 
     # ---- ad selection --------------------------------------------------
-    def _choose_ad(self) -> Ad | None:
+    def _plan_next(self) -> None:
+        with self._lock:
+            self.next_ad = self._choose_ad()
+
+    def _take_next_ad(self) -> Ad | None:
+        """The planned ad (re-read from the current config, in case it was edited), else a fresh pick."""
+        with self._lock:
+            planned, self.next_ad = self.next_ad, None
+            if planned is not None:
+                for ad in self._eligible_ads():
+                    if ad.name == planned.name:
+                        return ad
+            return self._choose_ad()
+
+    def _eligible_ads(self, refresh: bool = True) -> list[Ad]:
         ads = self.cfg.enabled_ads()
         vm = self.cfg.value_mode
         if vm.enabled and vm.skip_overpaying_ads:
@@ -193,9 +246,23 @@ class Poster:
                 if a not in kept:
                     log.info("Skipping ad '%s' (overpays by more than %g%%).", a.name, vm.overpay_warn_percent)
             ads = kept
+        if self.cfg.skip_unowned_items:
+            if refresh:
+                self._maybe_refresh_inventory()
+            unavailable = {a.name: m for a in ads if (m := missing_offer_items(a, self.inventory))}
+            for name, missing in unavailable.items():
+                if self.unavailable.get(name) != missing:
+                    names = ", ".join(self._item_name(i) for i in missing)
+                    log.warning("Skipping ad '%s': you don't own %s.", name, names)
+            self.unavailable = unavailable
+            ads = [a for a in ads if a.name not in unavailable]
+        return ads
+
+    def _choose_ad(self, refresh: bool = True) -> Ad | None:
+        ads = self._eligible_ads(refresh)
         if not ads:
             return None
-
+        vm = self.cfg.value_mode
         if vm.enabled and vm.strategy == "pick":
             pool = self._without_last(ads)
             weights = [pick_weight(evaluate_ad(a, self.catalog)) for a in pool]
@@ -211,6 +278,10 @@ class Poster:
     def _without_last(self, ads: list[Ad]) -> list[Ad]:
         pool = [a for a in ads if a.name != self._last_ad_name]
         return pool or ads
+
+    def _item_name(self, item_id: int) -> str:
+        item = self.catalog.get(item_id)
+        return item.name if item else str(item_id)
 
     # ---- live updates --------------------------------------------------
     def _mtime(self) -> float | None:
@@ -248,3 +319,15 @@ class Poster:
             log.info("Refreshed item values (%d items).", len(self.catalog))
         except (requests.RequestException, ValueError) as e:
             log.warning("Could not refresh item values (%s); using cached values.", type(e).__name__)
+
+    def _maybe_refresh_inventory(self) -> None:
+        if self.inventory is not None and self.inventory.age_seconds() < INVENTORY_REFRESH_SECONDS:
+            return
+        try:
+            self.inventory = fetch_inventory(self.session, self.cfg.roblox_user_id)
+            if self.inventory.private:
+                log.warning("Your Rolimons inventory is private, so owned items can't be checked.")
+        except (requests.RequestException, ValueError) as e:
+            log.warning("Could not check your inventory (%s); not skipping any ads for it.", type(e).__name__)
+            if self.inventory is None:
+                self.inventory = Inventory(private=True)  # unknown: don't skip; retry after the refresh interval

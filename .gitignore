@@ -8,3 +8,4 @@ dist/
 *.spec
 config.json
 *.json.tmp
+cache/

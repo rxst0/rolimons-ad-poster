@@ -3,6 +3,7 @@ import copy
 import logging
 import queue
 import re
+import sys
 import threading
 import time
 import tkinter as tk
@@ -11,18 +12,22 @@ from tkinter import messagebox, ttk
 
 import requests
 
-from roliposter import __version__
+from roliposter import __version__, autostart
 from roliposter import theme
 from roliposter.config import (MAX_OFFER_ITEMS, MAX_REQUEST_SLOTS, VALID_TAGS, Ad, Config, ConfigError,
                                load_config, save_config, validate_config)
 from roliposter.cookie import (COOKIE_ENV_VAR, clean_cookie, cookie_info, get_cookie, load_env_file,
                                looks_like_cookie, save_env_value)
+from roliposter.inventory import Inventory, fetch_inventory, missing_offer_items
 from roliposter.items import ItemCatalog
 from roliposter.logsetup import REDACTOR, setup_logging
-from roliposter.paths import config_path, env_path, log_dir, resource_path, state_path
+from roliposter.paths import cache_dir, config_path, env_path, log_dir, resource_path, state_path
 from roliposter.poster import AuthError, Poster, fmt_duration
 from roliposter.startup import StartupError, fetch_catalog_with_retry, prepare
 from roliposter.state import PostHistory
+from roliposter.thumbs import ThumbnailCache
+from roliposter.tray import Tray
+from roliposter.updates import check_for_update
 from roliposter.values import evaluate_ad
 
 log = logging.getLogger("roliposter.gui")
@@ -30,6 +35,9 @@ log = logging.getLogger("roliposter.gui")
 APP_NAME = "Rolimons Ad Poster"
 REPO_URL = "https://github.com/rxst0/rolimons-ad-poster"
 C = theme.COLORS
+THUMB_PX = 24
+INVENTORY_REFRESH_MS = 10 * 60 * 1000
+COOKIE_WARN_DAYS = 3
 
 HELP_TEXT = f"""\
 GETTING STARTED
@@ -48,11 +56,20 @@ GETTING STARTED
 2. Ads
    Click "New ad". Search items by name, add up to 4 you offer and up to 4
    things you want (items and/or tags like "upgrade" or "any"). Save.
+   Ads offering items you no longer own are skipped automatically.
 
 3. Start
    Click "Start posting". One ad is posted roughly every 15 minutes
    (Rolimons' cooldown) plus a small random delay, cycling through your ads.
-   Leave the app open. Click "Stop" any time.
+   "Skip" jumps to the following ad. Click "Stop" any time.
+
+RUNNING IN THE BACKGROUND
+- While posting, closing the window keeps the app running in the system
+  tray (bottom-right, near the clock). Right-click the tray icon to open,
+  stop, skip or quit.
+- Settings > App: start with Windows, start posting automatically,
+  notifications and update checks.
+- Settings > Schedule: only post during certain hours.
 
 SAFETY
 - This app only posts Rolimons trade ads. It never sends Roblox trades and
@@ -63,6 +80,7 @@ SAFETY
 FILES (next to the app)
   config.json  your ads and settings
   .env         your Rolimons cookie
+  state.json   post times and history
   logs\\        a log of every post attempt
 
 Version {__version__} - {REPO_URL}
@@ -111,17 +129,21 @@ def card(parent: tk.Misc, title: str | None = None, subtitle: str | None = None)
     return frame
 
 
-def scrolled_tree(parent: tk.Misc, columns: tuple[str, ...], height: int) -> tuple[ttk.Frame, ttk.Treeview]:
+def scrolled_tree(parent: tk.Misc, columns: tuple[str, ...], height: int,
+                  show: str = "headings") -> tuple[ttk.Frame, ttk.Treeview]:
     wrap = ttk.Frame(parent)
     wrap.columnconfigure(0, weight=1)
     wrap.rowconfigure(0, weight=1)
-    tree = ttk.Treeview(wrap, columns=columns, show="headings", height=height, selectmode="browse")
+    tree = ttk.Treeview(wrap, columns=columns, show=show, height=height, selectmode="browse")
     bar = ttk.Scrollbar(wrap, orient="vertical", command=tree.yview)
     tree.configure(yscrollcommand=bar.set)
     tree.grid(row=0, column=0, sticky="nsew")
     bar.grid(row=0, column=1, sticky="ns")
     tree.tag_configure("odd", background=theme.STRIPE)
     tree.tag_configure("off", foreground=theme.MUTED)
+    tree.tag_configure("warn", foreground=theme.WARN)
+    tree.tag_configure("ok", foreground=theme.OK)
+    tree.tag_configure("bad", foreground=theme.BAD)
     return wrap, tree
 
 
@@ -176,6 +198,7 @@ class AdEditor(Dialog):
         self.app = app
         self.ad = copy.deepcopy(ad)
         self.on_save = on_save
+        self._search_job = None
         self.minsize(1000, 560)
 
         b = self.body
@@ -203,12 +226,9 @@ class AdEditor(Dialog):
         self.var_search = tk.StringVar()
         search = ttk.Entry(sf, textvariable=self.var_search)
         search.grid(row=1, column=0, sticky="ew")
-        self.var_search.trace_add("write", lambda *_: self._search())
-        wrap, self.results = scrolled_tree(sf, ("name", "value"), 10)
-        self.results.heading("name", text="ITEM", anchor="w")
-        self.results.heading("value", text="VALUE", anchor="e")
-        self.results.column("name", width=170)
-        self.results.column("value", width=90, anchor="e", stretch=False)
+        self.var_search.trace_add("write", lambda *_: self._schedule_search())
+        wrap, self.results = scrolled_tree(sf, ("value",), 10, show="tree headings")
+        self._setup_item_columns(self.results)
         wrap.grid(row=2, column=0, sticky="nsew", pady=8)
         self.results.bind("<Double-1>", lambda _e: self._add("offer"))
         bf = ttk.Frame(sf)
@@ -228,6 +248,8 @@ class AdEditor(Dialog):
         self.offer_tree = self._item_list(of)
         self.offer_tree.grid(row=2, column=0, sticky="ew")
         ttk.Button(of, text="Remove selected", command=lambda: self._remove("offer")).grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        self.owned_hint = ttk.Label(of, text="", style="Warn.TLabel", wraplength=280, justify="left")
+        self.owned_hint.grid(row=4, column=0, sticky="w", pady=(10, 0))
 
         # Request
         rf = ttk.Frame(b)
@@ -255,40 +277,76 @@ class AdEditor(Dialog):
         self.summary = ttk.Label(foot, text="", style="Muted.TLabel")
         self.summary.pack(side="left")
 
+        app.thumb_listeners.append(self._on_thumbs)
+        self.bind("<Destroy>", self._on_destroy, add="+")
         self._refresh_lists()
+        app.request_thumbs(self.ad.all_item_ids())
         if not app.catalog:
             self.search_hint.config(text="Item list still loading... you can type an item ID.")
         self.show()
         search.focus_set()
 
+    def _on_destroy(self, event) -> None:
+        if event.widget is self and self._on_thumbs in self.app.thumb_listeners:
+            self.app.thumb_listeners.remove(self._on_thumbs)
+
     @staticmethod
-    def _item_list(parent) -> ttk.Treeview:
-        tree = ttk.Treeview(parent, columns=("name", "value"), show="headings", height=4, selectmode="browse")
-        tree.heading("name", text="ITEM", anchor="w")
+    def _setup_item_columns(tree: ttk.Treeview) -> None:
+        tree.heading("#0", text="ITEM", anchor="w")
         tree.heading("value", text="VALUE", anchor="e")
-        tree.column("name", width=150)
+        tree.column("#0", width=180)
         tree.column("value", width=90, anchor="e", stretch=False)
+
+    def _item_list(self, parent) -> ttk.Treeview:
+        tree = ttk.Treeview(parent, columns=("value",), show="tree headings", height=4, selectmode="browse")
+        self._setup_item_columns(tree)
         tree.tag_configure("odd", background=theme.STRIPE)
+        tree.tag_configure("warn", foreground=theme.WARN)
         return tree
 
+    def _insert_item(self, tree: ttk.Treeview, item_id: int, index: int, iid: str | None = None,
+                     warn: bool = False) -> None:
+        catalog = self.app.catalog
+        item = catalog.get(item_id) if catalog else None
+        text = item.label if item else f"Item {item_id}"
+        value = f"{item.default_value:,}" if item else ("not found" if catalog else "?")
+        tags = (("odd",) if index % 2 else ()) + (("warn",) if warn else ())
+        image = self.app.thumb(item_id) or self.app.blank_thumb
+        tree.insert("", "end", iid=iid, text=f"  {text}", values=(value,), tags=tags, image=image)
+
+    def _on_thumbs(self) -> None:
+        self._refresh_lists()
+        self._search()
+
+    def _schedule_search(self) -> None:
+        if self._search_job:
+            self.after_cancel(self._search_job)
+        self._search_job = self.after(250, self._search)
+
     def _search(self) -> None:
+        self._search_job = None
+        selected = self.results.selection()
         self.results.delete(*self.results.get_children())
         q = self.var_search.get().strip().lower()
         if not q:
             return
         catalog = self.app.catalog
-        matches = []
+        ids = []
         if catalog:
+            matches = []
             for item in catalog.items.values():
                 if q == str(item.id) or q in item.name.lower() or q == item.acronym.lower():
                     rank = 0 if q in (item.acronym.lower(), str(item.id)) else 1 if item.name.lower().startswith(q) else 2
                     matches.append((rank, -item.default_value, item))
             matches.sort(key=lambda m: (m[0], m[1]))
-            for n, (_, _, item) in enumerate(matches[:60]):
-                self.results.insert("", "end", iid=str(item.id), values=(item.label, f"{item.default_value:,}"),
-                                    tags=("odd",) if n % 2 else ())
+            ids = [item.id for _, _, item in matches[:60]]
         elif q.isdigit():
-            self.results.insert("", "end", iid=q, values=(f"Item {q}", "?"))
+            ids = [int(q)]
+        for n, item_id in enumerate(ids):
+            self._insert_item(self.results, item_id, n, iid=str(item_id))
+        if selected and self.results.exists(selected[0]):
+            self.results.selection_set(selected[0])
+        self.app.request_thumbs(ids)
 
     def _request_slots(self) -> int:
         return len(self.ad.request_item_ids) + sum(v.get() for v in self.tag_vars.values())
@@ -325,16 +383,16 @@ class AdEditor(Dialog):
             self.bell()
 
     def _refresh_lists(self) -> None:
-        catalog = self.app.catalog
-        for tree, ids in ((self.offer_tree, self.ad.offer_item_ids), (self.request_tree, self.ad.request_item_ids)):
+        missing = set(missing_offer_items(self.ad, self.app.inventory))
+        for tree, ids, check in ((self.offer_tree, self.ad.offer_item_ids, True),
+                                 (self.request_tree, self.ad.request_item_ids, False)):
             tree.delete(*tree.get_children())
             for n, item_id in enumerate(ids):
-                item = catalog.get(item_id) if catalog else None
-                values = ((item.label, f"{item.default_value:,}") if item
-                          else (f"Item {item_id}", "not found" if catalog else "?"))
-                tree.insert("", "end", values=values, tags=("odd",) if n % 2 else ())
-        if catalog:
-            av = evaluate_ad(self.ad, catalog)
+                self._insert_item(tree, item_id, n, warn=check and item_id in missing)
+        self.owned_hint.config(text="⚠ Highlighted items aren't in your Rolimons inventory, so this ad "
+                                    "will be skipped." if missing else "")
+        if self.app.catalog:
+            av = evaluate_ad(self.ad, self.app.catalog)
             text = f"Offer value  {av.offer_value:,}"
             if av.request_value is not None:
                 text += f"      Want value  {av.request_value:,}      ({av.overpay_percent:+.0f}%)"
@@ -404,62 +462,87 @@ class SettingsDialog(Dialog):
         super().__init__(app, "Settings")
         self.app = app
         c = app.cfg
-        b = self.body
-        b.columnconfigure(1, weight=1)
-        row = 0
+        cols = ttk.Frame(self.body)
+        cols.pack(fill="both", expand=True)
+        left, right = ttk.Frame(cols), ttk.Frame(cols)
+        left.pack(side="left", fill="both", expand=True, anchor="n")
+        ttk.Separator(cols, orient="vertical").pack(side="left", fill="y", padx=22)
+        right.pack(side="left", fill="both", expand=True, anchor="n")
+        rows = {left: 0, right: 0}
 
-        def section(text):
-            nonlocal row
-            if row:
-                ttk.Separator(b).grid(row=row, column=0, columnspan=2, sticky="ew", pady=14)
-                row += 1
-            ttk.Label(b, text=text, style="Title.TLabel").grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 8))
-            row += 1
+        def section(col, text):
+            if rows[col]:
+                ttk.Frame(col, height=14).grid(row=rows[col], column=0)
+                rows[col] += 1
+            ttk.Label(col, text=text, style="Title.TLabel").grid(row=rows[col], column=0, columnspan=2, sticky="w", pady=(0, 8))
+            rows[col] += 1
 
-        def field(label, widget):
-            nonlocal row
-            ttk.Label(b, text=label).grid(row=row, column=0, sticky="w", pady=5, padx=(0, 20))
-            widget.grid(row=row, column=1, sticky="w", pady=5)
-            row += 1
+        def field(col, label, widget):
+            ttk.Label(col, text=label).grid(row=rows[col], column=0, sticky="w", pady=5, padx=(0, 18))
+            widget.grid(row=rows[col], column=1, sticky="w", pady=5)
+            rows[col] += 1
 
-        def check(text, var):
-            nonlocal row
-            ttk.Checkbutton(b, text=text, variable=var).grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
-            row += 1
+        def check(col, text, value):
+            var = tk.BooleanVar(value=value)
+            ttk.Checkbutton(col, text=text, variable=var).grid(row=rows[col], column=0, columnspan=2, sticky="w", pady=2)
+            rows[col] += 1
+            return var
 
-        section("Posting")
+        # Left column: posting behaviour
+        section(left, "Posting")
         self.var_rotation = tk.StringVar(value=c.rotation)
-        rot = ttk.Frame(b)
+        rot = ttk.Frame(left)
         ttk.Radiobutton(rot, text="In order", value="sequential", variable=self.var_rotation).pack(side="left")
         ttk.Radiobutton(rot, text="Random", value="random", variable=self.var_rotation).pack(side="left", padx=16)
-        field("Ad order", rot)
+        field(left, "Ad order", rot)
         self.var_jmin = tk.StringVar(value=f"{c.jitter_seconds[0]:g}")
         self.var_jmax = tk.StringVar(value=f"{c.jitter_seconds[1]:g}")
-        jit = ttk.Frame(b)
-        ttk.Spinbox(jit, from_=0, to=1800, textvariable=self.var_jmin, width=6).pack(side="left")
+        jit = ttk.Frame(left)
+        ttk.Spinbox(jit, from_=0, to=1800, textvariable=self.var_jmin, width=5).pack(side="left")
         ttk.Label(jit, text="  to  ").pack(side="left")
-        ttk.Spinbox(jit, from_=0, to=1800, textvariable=self.var_jmax, width=6).pack(side="left")
-        ttk.Label(jit, text="  seconds", style="Muted.TLabel").pack(side="left")
-        field("Extra random delay", jit)
+        ttk.Spinbox(jit, from_=0, to=1800, textvariable=self.var_jmax, width=5).pack(side="left")
+        ttk.Label(jit, text="  sec", style="Muted.TLabel").pack(side="left")
+        field(left, "Extra random delay", jit)
         self.var_max = tk.StringVar(value=str(c.max_ads_per_24h))
-        field("Max ads per 24 hours", ttk.Spinbox(b, from_=1, to=96, textvariable=self.var_max, width=6))
+        field(left, "Max ads per 24 hours", ttk.Spinbox(left, from_=1, to=96, textvariable=self.var_max, width=5))
+        self.var_unowned = check(left, "Skip ads offering items I don't own", c.skip_unowned_items)
 
-        section("Value checks")
+        section(left, "Schedule")
+        ph = c.posting_hours
+        self.var_hours = check(left, "Only post during these hours", ph.enabled)
+        hrs = ttk.Frame(left)
+        self.var_hstart, self.var_hend = tk.StringVar(value=ph.start), tk.StringVar(value=ph.end)
+        ttk.Entry(hrs, textvariable=self.var_hstart, width=6).pack(side="left")
+        ttk.Label(hrs, text="  to  ").pack(side="left")
+        ttk.Entry(hrs, textvariable=self.var_hend, width=6).pack(side="left")
+        ttk.Label(hrs, text="  24-hour, e.g. 09:00", style="Muted.TLabel").pack(side="left")
+        field(left, "Between", hrs)
+
+        section(left, "Value checks")
         vm = c.value_mode
-        self.var_value = tk.BooleanVar(value=vm.enabled)
-        check("Warn me when an ad overpays", self.var_value)
+        self.var_value = check(left, "Warn me when an ad overpays", vm.enabled)
         self.var_overpay = tk.StringVar(value=f"{vm.overpay_warn_percent:g}")
-        op = ttk.Frame(b)
-        ttk.Spinbox(op, from_=0, to=1000, textvariable=self.var_overpay, width=6).pack(side="left")
-        ttk.Label(op, text="  % more value than it asks for", style="Muted.TLabel").pack(side="left")
-        field("Overpay threshold", op)
-        self.var_skip = tk.BooleanVar(value=vm.skip_overpaying_ads)
-        check("Don't post ads that overpay", self.var_skip)
-        self.var_pick = tk.BooleanVar(value=vm.strategy == "pick")
-        check("Smart pick: post high-demand ads more often", self.var_pick)
+        op = ttk.Frame(left)
+        ttk.Spinbox(op, from_=0, to=1000, textvariable=self.var_overpay, width=5).pack(side="left")
+        ttk.Label(op, text="  % more than it asks for", style="Muted.TLabel").pack(side="left")
+        field(left, "Overpay threshold", op)
+        self.var_skip = check(left, "Don't post ads that overpay", vm.skip_overpaying_ads)
+        self.var_pick = check(left, "Smart pick: post high-demand ads more often", vm.strategy == "pick")
 
-        ttk.Separator(b).grid(row=row, column=0, columnspan=2, sticky="ew", pady=14)
-        self.footer(b, "Save", self._save).grid(row=row + 1, column=0, columnspan=2, sticky="ew")
+        # Right column: app behaviour
+        section(right, "App")
+        a = c.app
+        self.var_tray = check(right, "Keep posting in the tray when I close the window", a.close_to_tray)
+        self.var_boot = check(right, "Start with Windows", autostart.is_enabled())
+        self.var_auto = check(right, "Start posting automatically when the app opens", a.auto_start_posting)
+        self.var_notify = check(right, "Show notifications", a.notifications)
+        self.var_updates = check(right, "Check for updates", a.check_updates)
+        ttk.Label(right, style="Muted.TLabel", justify="left", wraplength=300, text=(
+            "Tip: turn on \"Start with Windows\" and \"Start posting automatically\" to keep "
+            "ads going without opening the app.")).grid(row=rows[right], column=0, columnspan=2, sticky="w", pady=(10, 0))
+
+        ttk.Separator(self.body).pack(fill="x", pady=16)
+        self.footer(self.body, "Save", self._save).pack(fill="x")
         self.show()
 
     def _save(self) -> None:
@@ -473,16 +556,69 @@ class SettingsDialog(Dialog):
         if not (0 <= jmin <= jmax) or not 1 <= max_ads <= 96:
             messagebox.showwarning("Settings", "Delay must be min <= max, and max ads 1-96.", parent=self)
             return
-        c = self.app.cfg
+        c = copy.deepcopy(self.app.cfg)
         c.rotation = self.var_rotation.get()
         c.jitter_seconds = [jmin, jmax]
         c.max_ads_per_24h = max_ads
+        c.skip_unowned_items = self.var_unowned.get()
+        c.posting_hours.enabled = self.var_hours.get()
+        c.posting_hours.start = self.var_hstart.get().strip()
+        c.posting_hours.end = self.var_hend.get().strip()
         c.value_mode.enabled = self.var_value.get() or self.var_skip.get() or self.var_pick.get()
         c.value_mode.overpay_warn_percent = overpay
         c.value_mode.skip_overpaying_ads = self.var_skip.get()
         c.value_mode.strategy = "pick" if self.var_pick.get() else "warn"
+        c.app.close_to_tray = self.var_tray.get()
+        c.app.auto_start_posting = self.var_auto.get()
+        c.app.notifications = self.var_notify.get()
+        c.app.check_updates = self.var_updates.get()
+        hour_errors = [e for e in validate_config(c) if "posting_hours" in e]
+        if hour_errors:
+            messagebox.showwarning("Settings", "\n".join(hour_errors), parent=self)
+            return
+        try:
+            if self.var_boot.get() != autostart.is_enabled():
+                autostart.set_enabled(self.var_boot.get())
+        except OSError as e:
+            messagebox.showwarning("Settings", f"Couldn't change \"Start with Windows\": {e}", parent=self)
+            return
+        self.app.cfg = c
         self.app.persist()
         self.destroy()
+
+
+class HistoryDialog(Dialog):
+    RESULT_TAGS = {"SUCCESS": "ok", "COOLDOWN": "warn", "RATE_LIMITED": "warn", "AUTH_ERROR": "bad",
+                   "REJECTED": "bad", "NETWORK_ERROR": "warn", "SERVER_ERROR": "warn"}
+
+    def __init__(self, app: "App"):
+        super().__init__(app, "Post history")
+        self.minsize(820, 460)
+        b = self.body
+        attempts = list(reversed(PostHistory(state_path()).attempts))
+        posted = sum(1 for a in attempts if a["result"] == "SUCCESS")
+        head = ttk.Frame(b)
+        head.pack(fill="x", pady=(0, 10))
+        ttk.Label(head, text="Post history", style="Title.TLabel").pack(side="left")
+        ttk.Label(head, text=f"{len(attempts)} attempts  ·  {posted} posted", style="Muted.TLabel").pack(
+            side="left", padx=(10, 0), pady=(3, 0))
+        wrap, tree = scrolled_tree(b, ("when", "ad", "result", "message"), 14)
+        for col, text, width in (("when", "WHEN", 150), ("ad", "AD", 190), ("result", "RESULT", 120),
+                                 ("message", "DETAILS", 320)):
+            tree.heading(col, text=text, anchor="w")
+            tree.column(col, width=width, stretch=col == "message")
+        for n, a in enumerate(attempts):
+            when = time.strftime("%d %b  %H:%M:%S", time.localtime(a["t"]))
+            result = a["result"].replace("_", " ").title()
+            tags = (("odd",) if n % 2 else ()) + (self.RESULT_TAGS.get(a["result"], ""),)
+            tree.insert("", "end", values=(when, a["ad"], result, a.get("message", "")), tags=tags)
+        wrap.pack(fill="both", expand=True)
+        if not attempts:
+            ttk.Label(wrap, text="Nothing posted yet.", style="Muted.TLabel", background=theme.FIELD).place(
+                relx=0.5, rely=0.5, anchor="center")
+        foot = self.footer(b, "Close", self.destroy, cancel=False)
+        foot.pack(fill="x", pady=(16, 0))
+        self.show()
 
 
 class HelpDialog(Dialog):
@@ -506,14 +642,14 @@ class HelpDialog(Dialog):
 
 # ---- main window -----------------------------------------------------------
 class App(tk.Tk):
-    def __init__(self):
+    def __init__(self, start_minimized: bool = False):
         super().__init__()
         self.withdraw()
         self.title(APP_NAME)
         set_app_icon(self)
         theme.apply_theme(self)
-        self.geometry("960x780")
-        self.minsize(820, 660)
+        self.geometry("960x800")
+        self.minsize(840, 680)
 
         self.log_queue: queue.Queue = queue.Queue()
         self.events: queue.Queue = queue.Queue()
@@ -523,20 +659,36 @@ class App(tk.Tk):
         self.cfg_path = config_path()
         self.cfg = self._load_cfg()
         self.catalog: ItemCatalog | None = None
+        self.inventory: Inventory | None = None
         self.poster: Poster | None = None
         self.worker: threading.Thread | None = None
         self.stop_event: threading.Event | None = None
         self.history = PostHistory(state_path())
+        self.thumbs = ThumbnailCache(cache_dir() / "thumbs")
+        self.thumb_listeners: list = []
+        self._thumb_images: dict[int, tk.PhotoImage] = {}
+        self.blank_thumb = tk.PhotoImage(master=self, width=THUMB_PX, height=THUMB_PX)  # keeps rows aligned
+        self._thumb_pending: set[int] = set()
+        self._notified: set[str] = set()
+        self._user_stopped = False
+        self._hidden_hint_shown = False
 
         self._build()
         self.refresh_ads()
         self.update_cookie_status()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.tray = Tray(APP_NAME, resource_path("assets/icon.png"),
+                         lambda action: self.events.put(("tray", action)), self._is_running)
+        self.tray.start()
         threading.Thread(target=self._load_catalog, daemon=True).start()
+        if self.cfg.app.check_updates:
+            threading.Thread(target=self._check_updates, daemon=True).start()
         self.after(100, self._poll)
         self.after(500, self._tick)
+        self.after(3000, self._check_cookie_expiry)
         theme.dark_title_bar(self)
-        self.deiconify()
+        if not (start_minimized and self.tray.available):
+            self.deiconify()
         if not self.cfg.roblox_user_id and not self.cfg.ads:
             self.after(300, lambda: HelpDialog(self))
 
@@ -552,13 +704,25 @@ class App(tk.Tk):
         save_config(self.cfg, self.cfg_path)
         self.refresh_ads()
 
+    def _is_running(self) -> bool:
+        return bool(self.worker and self.worker.is_alive())
+
+    def notify(self, key: str | None, title: str, message: str) -> None:
+        """Windows notification (once per key per session when a key is given)."""
+        tray = getattr(self, "tray", None)
+        if tray is None or not self.cfg.app.notifications or (key and key in self._notified):
+            return
+        if key:
+            self._notified.add(key)
+        tray.notify(title, message)
+
     # ---- layout --------------------------------------------------------
     def _build(self) -> None:
         root = ttk.Frame(self, style="App.TFrame", padding=(22, 18, 22, 20))
         root.pack(fill="both", expand=True)
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(2, weight=3)
-        root.rowconfigure(4, weight=2)
+        root.rowconfigure(3, weight=3)
+        root.rowconfigure(5, weight=2)
 
         # Header
         head = ttk.Frame(root, style="App.TFrame")
@@ -573,10 +737,21 @@ class App(tk.Tk):
         ttk.Label(titles, text=f"Automatic Rolimons trade ads  ·  v{__version__}", style="AppMuted.TLabel").pack(anchor="w")
         ttk.Button(head, text="Help", style="Ghost.TButton", command=lambda: HelpDialog(self)).pack(side="right")
         ttk.Button(head, text="Settings", style="Ghost.TButton", command=lambda: SettingsDialog(self)).pack(side="right", padx=(0, 4))
+        ttk.Button(head, text="History", style="Ghost.TButton", command=lambda: HistoryDialog(self)).pack(side="right", padx=(0, 4))
+
+        # Update banner (hidden until an update is found)
+        self.banner = ttk.Frame(root, style="Banner.TFrame", padding=(18, 10))
+        self.banner_text = ttk.Label(self.banner, text="", style="Banner.TLabel")
+        self.banner_text.pack(side="left")
+        ttk.Label(self.banner, text="Your ads and cookie are kept when you update.",
+                  style="BannerMuted.TLabel").pack(side="left", padx=(12, 0))
+        ttk.Button(self.banner, text="Dismiss", command=self.banner.grid_remove).pack(side="right")
+        self.banner_btn = ttk.Button(self.banner, text="Download", style="Accent.TButton")
+        self.banner_btn.pack(side="right", padx=(0, 8))
 
         # Account
         acc = card(root, "Account")
-        acc.grid(row=1, column=0, sticky="ew")
+        acc.grid(row=2, column=0, sticky="ew")
         grid = ttk.Frame(acc)
         grid.pack(fill="x")
         grid.columnconfigure(1, weight=1)
@@ -599,7 +774,7 @@ class App(tk.Tk):
 
         # Ads
         ads = card(root, "Your ads")
-        ads.grid(row=2, column=0, sticky="nsew", pady=14)
+        ads.grid(row=3, column=0, sticky="nsew", pady=14)
         self.ads_count = ttk.Label(ads.head, text="", style="Muted.TLabel")
         self.ads_count.pack(side="left", padx=(10, 0), pady=(3, 0))
         ttk.Button(ads.head, text="+  New ad", style="Accent.TButton", command=self._new_ad).pack(side="right")
@@ -608,10 +783,10 @@ class App(tk.Tk):
         self.tree.heading("on", text="STATUS", anchor="w")
         self.tree.heading("offer", text="OFFERING", anchor="w")
         self.tree.heading("want", text="WANTS", anchor="w")
-        self.tree.column("name", width=210)
-        self.tree.column("on", width=80, stretch=False)
-        self.tree.column("offer", width=250)
-        self.tree.column("want", width=250)
+        self.tree.column("name", width=200)
+        self.tree.column("on", width=130, stretch=False)
+        self.tree.column("offer", width=230)
+        self.tree.column("want", width=230)
         wrap.pack(fill="both", expand=True)
         self.tree.bind("<Double-1>", lambda _e: self._edit_ad())
         self.tree.bind("<Delete>", lambda _e: self._delete_ad())
@@ -626,7 +801,7 @@ class App(tk.Tk):
 
         # Status
         run = card(root)
-        run.grid(row=3, column=0, sticky="ew")
+        run.grid(row=4, column=0, sticky="ew")
         info = ttk.Frame(run)
         info.pack(side="left", fill="x", expand=True)
         self.status = ttk.Label(info, text="Stopped", style="Status.TLabel")
@@ -635,14 +810,15 @@ class App(tk.Tk):
         self.substatus.pack(anchor="w", pady=(2, 0))
         self.btn_run = ttk.Button(run, text="Start posting", style="Big.Accent.TButton", command=self._toggle_run)
         self.btn_run.pack(side="right")
+        self.btn_skip = ttk.Button(run, text="Skip", style="Big.TButton", command=self._skip)
 
         # Activity
         logf = card(root, "Activity")
-        logf.grid(row=4, column=0, sticky="nsew", pady=(14, 0))
+        logf.grid(row=5, column=0, sticky="nsew", pady=(14, 0))
         ttk.Button(logf.head, text="Clear", command=self._clear_log).pack(side="right")
         box = ttk.Frame(logf)
         box.pack(fill="both", expand=True)
-        self.logbox = tk.Text(box, height=7, state="disabled", font=theme.FONT_MONO, wrap="word", padx=10, pady=8,
+        self.logbox = tk.Text(box, height=6, state="disabled", font=theme.FONT_MONO, wrap="word", padx=10, pady=8,
                               **theme.text_widget_options())
         bar = ttk.Scrollbar(box, orient="vertical", command=self.logbox.yview)
         self.logbox.configure(yscrollcommand=bar.set)
@@ -663,7 +839,9 @@ class App(tk.Tk):
         uid = uid or 0
         if uid != self.cfg.roblox_user_id:
             self.cfg.roblox_user_id = uid
+            self.inventory = None
             self.persist()
+            self._refresh_inventory()
         self.var_user.set(str(uid) if uid else "")
         self._update_user_status()
 
@@ -683,11 +861,27 @@ class App(tk.Tk):
             text, color = "Expired — set a new one", "bad"
         elif info and info.expires_at:
             who = f"{info.player_name}  ·  " if info.player_name else ""
-            text, color = f"✓  {who}expires {time.strftime('%d %b %Y', time.localtime(info.expires_at))}", "ok"
+            soon = info.expires_at - time.time() < COOKIE_WARN_DAYS * 86400
+            text = f"{'⚠' if soon else '✓'}  {who}expires {time.strftime('%d %b %Y', time.localtime(info.expires_at))}"
+            color = "warn" if soon else "ok"
         else:
             text, color = "✓  Saved", "ok"
         self.cookie_status.config(text=text, foreground=C[color])
         self._update_user_status()
+
+    def _check_cookie_expiry(self) -> None:
+        try:
+            cookie = get_cookie()
+        except ValueError:
+            cookie = None
+        info = cookie_info(cookie) if cookie else None
+        if info and info.expires_at and not info.expired:
+            days = (info.expires_at - time.time()) / 86400
+            if days < COOKIE_WARN_DAYS:
+                self.notify("cookie-expiry", "Rolimons cookie expiring soon",
+                            f"Your cookie expires in {max(1, round(days * 24))} hours. Set a fresh one to keep posting.")
+        self.update_cookie_status()
+        self.after(6 * 3600 * 1000, self._check_cookie_expiry)
 
     def use_cookie_user_id(self, player_id: int) -> None:
         """The cookie says which Roblox account it verifies; use that ID so the two can't disagree."""
@@ -696,20 +890,81 @@ class App(tk.Tk):
                 log.info("Roblox user ID changed from %d to %d to match your cookie.",
                          self.cfg.roblox_user_id, player_id)
             self.cfg.roblox_user_id = player_id
+            self.inventory = None
             self.persist()
+            self._refresh_inventory()
         self.var_user.set(str(player_id))
         self._update_user_status()
 
+    # ---- items: inventory + thumbnails --------------------------------
+    def _refresh_inventory(self) -> None:
+        uid = self.cfg.roblox_user_id
+        if uid <= 0:
+            return
+
+        def work():
+            try:
+                self.events.put(("inventory", (uid, fetch_inventory(requests.Session(), uid))))
+            except (requests.RequestException, ValueError) as e:
+                log.warning("Couldn't load your inventory from Rolimons (%s).", type(e).__name__)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _inventory_loop(self) -> None:
+        if not self._is_running():
+            self._refresh_inventory()
+        self.after(INVENTORY_REFRESH_MS, self._inventory_loop)
+
+    def thumb(self, item_id: int) -> tk.PhotoImage | None:
+        image = self._thumb_images.get(item_id)
+        if image is None and self.thumbs.cached(item_id):
+            try:
+                from PIL import Image, ImageTk
+                with Image.open(self.thumbs.path(item_id)) as img:
+                    image = ImageTk.PhotoImage(img.convert("RGBA").resize((THUMB_PX, THUMB_PX), Image.LANCZOS),
+                                               master=self)
+                self._thumb_images[item_id] = image
+            except Exception:
+                return None
+        return image
+
+    def request_thumbs(self, item_ids: list[int]) -> None:
+        wanted = [i for i in item_ids if not self.thumbs.cached(i) and i not in self._thumb_pending]
+        if not wanted:
+            return
+        self._thumb_pending.update(wanted)
+
+        def work():
+            try:
+                self.thumbs.fetch(requests.Session(), wanted)
+            except (requests.RequestException, OSError, ValueError) as e:
+                log.debug("Thumbnail download failed: %s", e)
+            finally:
+                self.events.put(("thumbs", wanted))
+        threading.Thread(target=work, daemon=True).start()
+
     # ---- ads -----------------------------------------------------------
+    def _unavailable(self) -> dict[str, list[int]]:
+        if self.poster is not None:
+            return self.poster.unavailable
+        if not self.cfg.skip_unowned_items:
+            return {}
+        return {a.name: m for a in self.cfg.ads if (m := missing_offer_items(a, self.inventory))}
+
     def refresh_ads(self) -> None:
         selected = self._selected_index()
+        unavailable = self._unavailable()
         self.tree.delete(*self.tree.get_children())
         for i, ad in enumerate(self.cfg.ads):
             offer = ", ".join(short_name(self.catalog, x) for x in ad.offer_item_ids)
             want = ", ".join([short_name(self.catalog, x) for x in ad.request_item_ids] + ad.request_tags)
-            tags = (("odd",) if i % 2 else ()) + (() if ad.enabled else ("off",))
-            self.tree.insert("", "end", iid=str(i), values=(ad.name, "● On" if ad.enabled else "○ Off", offer, want),
-                             tags=tags)
+            tags = ("odd",) if i % 2 else ()
+            if not ad.enabled:
+                status, tags = "○ Off", tags + ("off",)
+            elif ad.name in unavailable:
+                status, tags = "⚠ Item not owned", tags + ("warn",)
+            else:
+                status = "● On"
+            self.tree.insert("", "end", iid=str(i), values=(ad.name, status, offer, want), tags=tags)
         on = len(self.cfg.enabled_ads())
         self.ads_count.config(text=f"{len(self.cfg.ads)} total  ·  {on} on" if self.cfg.ads else "")
         if self.cfg.ads:
@@ -718,6 +973,8 @@ class App(tk.Tk):
                 self._select(min(selected, len(self.cfg.ads) - 1))
         else:
             self.empty_hint.place(relx=0.5, rely=0.55, anchor="center")
+        for name in unavailable:
+            self.notify(f"unowned:{name}", "Ad skipped", f"'{name}' offers an item you no longer own, so it's being skipped.")
 
     def _selected_index(self) -> int | None:
         sel = self.tree.selection() if hasattr(self, "tree") else ()
@@ -777,29 +1034,45 @@ class App(tk.Tk):
             self.persist()
 
     # ---- running -------------------------------------------------------
-    def _toggle_run(self) -> None:
-        if self.worker and self.worker.is_alive():
-            if self.stop_event:
-                self.stop_event.set()
-            self.btn_run.config(state="disabled")
-            self.status.config(text="Stopping...", foreground=C["text"])
-            return
+    def _can_start(self, quiet: bool = False) -> bool:
         self._save_user_id()
         try:
             has_cookie = bool(get_cookie())
         except ValueError:
             has_cookie = False
-        if not has_cookie:
-            messagebox.showinfo(APP_NAME, "Set your Rolimons cookie first (click \"Set cookie\").")
+        problems = [] if has_cookie else ["Set your Rolimons cookie first (click \"Set cookie\")."]
+        problems += validate_config(self.cfg)
+        if problems and not quiet:
+            messagebox.showwarning(APP_NAME, "Fix these first:\n\n• " + "\n• ".join(problems))
+        elif problems:
+            log.warning("Not starting automatically: %s", " ".join(problems))
+        return not problems
+
+    def _start(self, quiet: bool = False) -> None:
+        if self._is_running() or not self._can_start(quiet):
             return
-        errors = validate_config(self.cfg)
-        if errors:
-            messagebox.showwarning(APP_NAME, "Fix these first:\n\n• " + "\n• ".join(errors))
-            return
+        self._user_stopped = False
         self.stop_event = threading.Event()
         self.worker = threading.Thread(target=self._run_worker, args=(self.stop_event,), daemon=True)
         self.worker.start()
         self._set_running(True)
+
+    def _stop(self) -> None:
+        if self._is_running() and self.stop_event:
+            self._user_stopped = True
+            self.stop_event.set()
+            self.btn_run.config(state="disabled")
+            self.status.config(text="Stopping...", foreground=C["text"])
+
+    def _toggle_run(self) -> None:
+        if self._is_running():
+            self._stop()
+        else:
+            self._start()
+
+    def _skip(self) -> None:
+        if self.poster is not None:
+            self.poster.skip_next()
 
     def _run_worker(self, stop_event: threading.Event) -> None:
         session = requests.Session()
@@ -823,28 +1096,45 @@ class App(tk.Tk):
             log.exception("Unexpected error")
             self.events.put(("error", "Something went wrong. See the Activity log for details."))
         finally:
+            if self.poster is not None:
+                self.inventory = self.poster.inventory or self.inventory
             self.poster = None
             self.events.put(("stopped", None))
 
     def _set_running(self, running: bool) -> None:
         self.btn_run.config(text="Stop" if running else "Start posting", state="normal",
                             style="Big.TButton" if running else "Big.Accent.TButton")
+        if running:
+            self.btn_skip.pack(side="right", padx=(0, 10))
+        else:
+            self.btn_skip.pack_forget()
         self.status.config(text="Starting..." if running else "Stopped", foreground=C["text"])
+        self.tray.refresh()
 
     def _tick(self) -> None:
         poster = self.poster
-        count = f"{self.history.count_24h()} of {self.cfg.max_ads_per_24h} ads posted in the last 24 hours"
-        if poster and poster.wait_until:
-            remaining = max(0, poster.wait_until - time.time())
-            self.status.config(text=f"Next ad in {fmt_duration(remaining)}", foreground=C["accent"])
-            self.substatus.config(text=f"{poster.status_text.capitalize()}  ·  {count}")
-        elif poster:
-            self.status.config(text=poster.status_text, foreground=C["accent"])
-            self.substatus.config(text=count)
-        elif self.worker and self.worker.is_alive():
+        count = f"{self.history.count_24h()} of {self.cfg.max_ads_per_24h} posted in the last 24h"
+        tooltip = APP_NAME
+        if poster:
+            nxt = f"Next: {poster.next_ad.name}  ·  " if poster.next_ad else ""
+            if poster.wait_until:
+                remaining = fmt_duration(max(0, poster.wait_until - time.time()))
+                self.status.config(text=f"Next ad in {remaining}", foreground=C["accent"])
+                self.substatus.config(text=f"{nxt}{poster.status_text.capitalize()}  ·  {count}")
+                tooltip = f"{APP_NAME} — next ad in {remaining}"
+            else:
+                self.status.config(text=poster.status_text, foreground=C["accent"])
+                self.substatus.config(text=f"{nxt}{count}")
+                tooltip = f"{APP_NAME} — {poster.status_text}"
+            self.btn_skip.config(state="normal" if poster.next_ad else "disabled")
+            if poster.unavailable.keys() != getattr(self, "_shown_unavailable", {}).keys():
+                self._shown_unavailable = dict(poster.unavailable)
+                self.refresh_ads()
+        elif self._is_running():
             self.status.config(text="Checking setup...", foreground=C["text"])
         else:
             self.substatus.config(text=f"Ready when you are  ·  {count}")
+        self.tray.set_tooltip(tooltip)
         self.after(500, self._tick)
 
     # ---- background events --------------------------------------------
@@ -853,11 +1143,39 @@ class App(tk.Tk):
             self.events.put(("catalog", fetch_catalog_with_retry(requests.Session())))
         except StartupError as e:
             log.warning("%s", e)
+            self.events.put(("catalog", None))
+
+    def _check_updates(self) -> None:
+        try:
+            found = check_for_update(requests.Session())
+        except (requests.RequestException, ValueError):
+            return
+        if found:
+            self.events.put(("update", found))
+
+    def _show_update(self, version: str, url: str) -> None:
+        self.banner_text.config(text=f"Version {version} is available")
+        self.banner_btn.config(command=lambda: webbrowser.open(url or REPO_URL + "/releases/latest"))
+        self.banner.grid(row=1, column=0, sticky="ew", pady=(0, 14))
+        log.info("Update available: v%s (you have v%s).", version, __version__)
+        self.notify("update", "Update available", f"Rolimons Ad Poster {version} is available on GitHub.")
 
     def _clear_log(self) -> None:
         self.logbox.config(state="normal")
         self.logbox.delete("1.0", "end")
         self.logbox.config(state="disabled")
+
+    def _handle_tray(self, action: str) -> None:
+        if action == "show":
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+        elif action == "toggle":
+            self._toggle_run()
+        elif action == "skip":
+            self._skip()
+        elif action == "quit":
+            self._quit()
 
     def _poll(self) -> None:
         lines = []
@@ -886,22 +1204,58 @@ class App(tk.Tk):
                 break
             if kind == "stopped":
                 self._set_running(False)
+                if not self._user_stopped:
+                    self.notify(None, "Posting stopped", "Rolimons Ad Poster stopped posting. Open it to see why.")
+                self.refresh_ads()
             elif kind == "error":
+                self.notify(None, "Rolimons Ad Poster", payload.split("\n")[0])
                 messagebox.showerror(APP_NAME, payload)
             elif kind == "catalog":
-                self.catalog = payload
-                self.refresh_ads()
+                first = self.catalog is None
+                if payload is not None:
+                    self.catalog = payload
+                    self.refresh_ads()
+                if first:
+                    self._inventory_loop()
+                    if self.cfg.app.auto_start_posting:
+                        log.info("Starting automatically (Settings > App).")
+                        self._start(quiet=True)
+            elif kind == "inventory":
+                uid, inventory = payload
+                if uid == self.cfg.roblox_user_id:
+                    self.inventory = inventory
+                    self.refresh_ads()
+                    for listener in list(self.thumb_listeners):
+                        listener()
+            elif kind == "thumbs":
+                self._thumb_pending.difference_update(payload)
+                for listener in list(self.thumb_listeners):
+                    listener()
+            elif kind == "update":
+                self._show_update(*payload)
+            elif kind == "tray":
+                self._handle_tray(payload)
         self.after(100, self._poll)
 
     def _on_close(self) -> None:
-        if self.worker and self.worker.is_alive():
-            if not messagebox.askyesno(APP_NAME, "Posting is running. Stop and quit?"):
-                return
-            if self.stop_event:
-                self.stop_event.set()
+        if self._is_running() and self.cfg.app.close_to_tray and self.tray.available:
+            self.withdraw()
+            if not self._hidden_hint_shown:
+                self._hidden_hint_shown = True
+                self.tray.notify(APP_NAME, "Still posting in the background. Right-click the tray icon to quit.")
+            return
+        if self._is_running() and not messagebox.askyesno(APP_NAME, "Posting is running. Stop and quit?"):
+            return
+        self._quit()
+
+    def _quit(self) -> None:
+        if self._is_running() and self.stop_event:
+            self._user_stopped = True
+            self.stop_event.set()
             self.worker.join(timeout=3)
+        self.tray.stop()
         self.destroy()
 
 
 if __name__ == "__main__":
-    App().mainloop()
+    App(start_minimized="--minimized" in sys.argv[1:]).mainloop()

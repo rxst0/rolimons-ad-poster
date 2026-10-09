@@ -2,7 +2,10 @@
   "roblox_user_id": 1,
   "rotation": "sequential",
   "cooldown_minutes": 15,
-  "jitter_seconds": [20, 120],
+  "jitter_seconds": [
+    20,
+    120
+  ],
   "max_ads_per_24h": 55,
   "value_mode": {
     "enabled": true,
@@ -10,27 +13,54 @@
     "overpay_warn_percent": 25,
     "skip_overpaying_ads": false
   },
+  "skip_unowned_items": true,
+  "posting_hours": {
+    "enabled": false,
+    "start": "09:00",
+    "end": "23:00"
+  },
+  "app": {
+    "close_to_tray": true,
+    "auto_start_posting": false,
+    "notifications": true,
+    "check_updates": true
+  },
   "ads": [
     {
       "name": "Tabby + Crown for upgrade",
       "enabled": true,
-      "offer_item_ids": [10159617728, 1081300],
+      "offer_item_ids": [
+        10159617728,
+        1081300
+      ],
       "request_item_ids": [],
-      "request_tags": ["upgrade", "demand"]
+      "request_tags": [
+        "upgrade",
+        "demand"
+      ]
     },
     {
       "name": "Madness Face for Beast Mode",
       "enabled": true,
-      "offer_item_ids": [130213380],
-      "request_item_ids": [128992838],
+      "offer_item_ids": [
+        130213380
+      ],
+      "request_item_ids": [
+        128992838
+      ],
       "request_tags": []
     },
     {
       "name": "Adurite Antlers downgrade",
       "enabled": true,
-      "offer_item_ids": [162066057],
+      "offer_item_ids": [
+        162066057
+      ],
       "request_item_ids": [],
-      "request_tags": ["downgrade", "any"]
+      "request_tags": [
+        "downgrade",
+        "any"
+      ]
     }
   ]
 }

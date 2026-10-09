@@ -41,7 +41,12 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\RoliAdPoster.exe"; Tasks: des
 [Run]
 Filename: "{app}\RoliAdPoster.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
 
+[Registry]
+; Remove the app's "Start with Windows" entry (created from Settings) on uninstall.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "RolimonsAdPoster"; Flags: uninsdeletevalue
+
 [UninstallDelete]
+Type: filesandordirs; Name: "{app}\cache"
 ; Files the app creates at runtime (including the saved cookie).
 Type: files; Name: "{app}\.env"
 Type: files; Name: "{app}\config.json"

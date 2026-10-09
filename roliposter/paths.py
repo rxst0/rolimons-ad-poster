@@ -25,6 +25,10 @@ def log_dir() -> Path:
     return app_dir() / "logs"
 
 
+def cache_dir() -> Path:
+    return app_dir() / "cache"
+
+
 def resource_path(relative: str) -> Path:
     """Bundled read-only files (e.g. the icon): inside the PyInstaller bundle when frozen."""
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))

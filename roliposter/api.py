@@ -10,6 +10,9 @@ from .items import USER_AGENT
 # Unofficial endpoint (verified live Oct 2026). Body fields match the open-source `roli` crate.
 CREATE_AD_URL = "https://api.rolimons.com/tradeads/v1/createad"
 AUTH_ERROR_CODES = {4, 5}  # 4 = missing verification cookie, 5 = invalid verification data
+# Codes seen from createad: 2 = invalid ad contents (e.g. "Invalid offered item count").
+# A successful post returns 201 {"success": true}. The cooldown reply has not been observed yet.
+INVALID_AD_CODES = {2}
 COOLDOWN_HINTS = ("cooldown", "wait", "too soon", "recently", "too many ads")
 
 
@@ -29,6 +32,7 @@ class PostResult:
     status_code: int | None
     message: str
     retry_after: float | None = None
+    raw: str = ""  # first part of Rolimons' reply, logged so new response formats can be spotted
 
 
 def build_payload(user_id: int, ad: Ad) -> dict:
@@ -61,11 +65,18 @@ def classify_response(resp: requests.Response) -> PostResult:
     lower = message.lower()
     code = data.get("code")
     retry = _retry_after(resp)
+    result = _classify(status, data, head, message, lower, code, retry)
+    result.raw = " ".join(text[:300].split())
+    return result
 
+
+def _classify(status, data, head, message, lower, code, retry) -> PostResult:
     if "cloudflare" in head and "<html" in head:
         return PostResult(Outcome.SERVER_ERROR, status, "Blocked by a Cloudflare challenge page", retry)
     if 200 <= status < 300 and data.get("success", True) is not False:
         return PostResult(Outcome.SUCCESS, status, message or "Ad posted")
+    if code in INVALID_AD_CODES:
+        return PostResult(Outcome.REJECTED, status, message or f"Invalid ad (code {code})")
     if any(h in lower for h in COOLDOWN_HINTS):
         return PostResult(Outcome.COOLDOWN, status, message, retry)
     if status in (401, 403, 422) or code in AUTH_ERROR_CODES:

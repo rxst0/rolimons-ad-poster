@@ -13,3 +13,4 @@ cache/
 android/.devdata/
 android/.buildozer/
 android/bin/
+!android/buildozer.spec

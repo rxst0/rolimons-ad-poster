@@ -1,7 +1,8 @@
 # Rolimons Ad Poster
 
 Automatically posts your [Rolimons](https://www.rolimons.com/trades) trade ads every ~15 minutes,
-rotating through ads you set up. It runs as a simple Windows app, so you don't need Python.
+rotating through ads you set up. It runs as a simple app on **Windows** and **Android**, so you don't need Python.
+Fully open source, with no servers involved: each device posts on its own.
 
 > **Safe by design:** it only posts Rolimons trade ads. It never sends Roblox trades and never asks
 > for your `.ROBLOSECURITY` cookie or Roblox password. If any tool asks for those, it's a scam.
@@ -15,7 +16,7 @@ rotating through ads you set up. It runs as a simple Windows app, so you don't n
 - Optional posting hours (for example 09:00–23:00), a post history, and a "Skip to next ad" button
 - Value checks: warns about overpaying ads and can favor high-demand ads
 
-## Download
+## Download (Windows)
 
 1. Go to [**Releases**](https://github.com/rxst0/rolimons-ad-poster/releases/latest) and download **`RolimonsAdPosterSetup.exe`**.
 2. Run it and click **Install**. No admin rights are needed.
@@ -28,6 +29,20 @@ To uninstall, go to **Settings → Apps → Installed apps → Rolimons Ad Poste
 Click **More info → Run anyway**. You can always read the source code here and build it yourself (see below).
 
 *Portable option:* download `RoliAdPoster.exe` instead and run it from any folder. It saves its settings next to itself.
+
+## Download (Android)
+
+1. On your phone, open [**Releases**](https://github.com/rxst0/rolimons-ad-poster/releases/latest) and download **`RolimonsAdPoster.apk`**.
+2. Open the file. If Android asks, allow your browser to **install unknown apps**, then tap **Install**.
+   Play Protect may warn because the app isn't from the Play Store; tap **More details → Install anyway**.
+3. Open **Rolimons Ad Poster**, tap **Sign in to Rolimons**, and log in and verify like on the website.
+   The app picks up your cookie by itself, so there's nothing to copy.
+4. Add your ads and tap **Start posting**. A notification stays in your status bar while it posts, even with
+   the screen off. In **Settings**, tap **Allow running in the background** so Android doesn't pause it.
+   Some phones (Samsung, Xiaomi, OnePlus) also have their own battery saver: set the app to *Unrestricted* there.
+
+To update, install the newer APK over the old one; your ads and cookie are kept. The app tells you when one is out.
+Run posting on **one device at a time**: two devices posting for the same account would hit each other's cooldown.
 
 ## Setup (2 minutes)
 
@@ -116,6 +131,19 @@ Code layout (`roliposter/`): `api.py` (Rolimons requests and replies), `poster.p
 retries), `inventory.py` (owned items), `schedule.py` (posting hours), `items.py` / `values.py`
 (item catalog and value checks), `thumbs.py` (item pictures), `tray.py`, `autostart.py`, `updates.py`,
 `theme.py`, `config.py`, `cookie.py`, `state.py`, `startup.py`.
+
+### Android app
+The Android app lives in `android/` (Kivy) and bundles the same `roliposter` engine. Posting runs in a
+foreground service (`android/service.py`) that talks to the screens through `status.json`/`control.json`
+(`android/runner.py`).
+```
+py -3.12 -m venv .venv-mobile
+.venv-mobile\Scripts\pip install kivy==2.3.1 requests
+.venv-mobile\Scripts\python android\main.py   # phone-sized preview on the PC
+```
+APKs are built on Linux with Buildozer by GitHub Actions: `android.yml` builds a debug APK and smoke-tests it
+on an emulator (screenshots are uploaded as an artifact), and the release workflow builds the signed APK.
+Signing uses the `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD` and `ANDROID_KEY_ALIAS` repository secrets.
 
 ### Releasing
 Bump `__version__` in `roliposter/__init__.py`, commit, then push a matching tag:

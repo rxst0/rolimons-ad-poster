@@ -6,7 +6,7 @@ package.domain = io.github.rxst0
 # The build copies ../roliposter, ../assets and ../config.example.json in here first
 # (see .github/workflows/android.yml), so the APK uses the same engine as the PC app.
 source.dir = .
-source.include_exts = py,kv,png,json
+source.include_exts = py,kv,png,json,ttf,txt
 source.exclude_dirs = .devdata, bin, .buildozer, __pycache__
 
 version.regex = __version__ = "(.*)"
@@ -16,6 +16,9 @@ version.filename = %(source.dir)s/roliposter/__init__.py
 requirements = python3,kivy==2.3.1,requests,urllib3,certifi,idna,charset-normalizer==2.1.1,pyjnius,android
 
 icon.filename = %(source.dir)s/assets/icon-512.png
+# Adaptive icon (Android 8+): same artwork as the PC icon, cropped to each launcher's shape.
+icon.adaptive_foreground.filename = %(source.dir)s/assets/icon-fg.png
+icon.adaptive_background.filename = %(source.dir)s/assets/icon-bg.png
 presplash.filename = %(source.dir)s/assets/presplash.png
 android.presplash_color = #15181D
 orientation = portrait

@@ -32,6 +32,7 @@ from kivy.utils import get_color_from_hex  # noqa: E402
 
 import runner  # noqa: E402
 from roliposter import __version__  # noqa: E402
+from roliposter import palette as P  # noqa: E402
 from roliposter.config import (MAX_OFFER_ITEMS, MAX_REQUEST_SLOTS, VALID_TAGS, Ad, Config,  # noqa: E402
                                ConfigError, load_config, save_config, validate_config)
 from roliposter.cookie import (COOKIE_ENV_VAR, clean_cookie, cookie_info, get_cookie,  # noqa: E402
@@ -47,7 +48,21 @@ from roliposter.updates import check_for_update  # noqa: E402
 from roliposter.values import evaluate_ad  # noqa: E402
 
 COOKIE_WARN_DAYS = 3
-RESULT_COLORS = {"SUCCESS": "#4ade80", "AUTH_ERROR": "#f87171", "REJECTED": "#f87171"}
+RESULT_COLORS = {"SUCCESS": P.OK, "AUTH_ERROR": P.BAD, "REJECTED": P.BAD}
+
+
+def asset(relative: str) -> Path:
+    """Shared assets: copied next to main.py in the APK, or the repo's assets/ in the desktop preview."""
+    bundled = HERE / relative
+    return bundled if bundled.exists() else HERE.parent / relative
+
+
+def register_fonts() -> None:
+    """Makes Inter (the PC app's font too) the default for every label."""
+    from kivy.core.text import LabelBase
+    regular, bold = asset(P.FONT_FILES["regular"]), asset(P.FONT_FILES["bold"])
+    if regular.exists() and bold.exists():
+        LabelBase.register(name="Roboto", fn_regular=str(regular), fn_bold=str(bold))
 
 
 # ---- widgets -------------------------------------------------------------------
@@ -82,7 +97,7 @@ class ItemRow(BoxLayout):
         btn = FlatButton(text=text, size_hint=(None, None), size=(max(56, len(text) * 11 + 28), 40),
                          font_size="14sp")
         if accent:
-            btn.bg, btn.bg_down = get_color_from_hex("#3b82f6"), get_color_from_hex("#2563eb")
+            btn.bg, btn.bg_down = get_color_from_hex(P.ACCENT), get_color_from_hex(P.ACCENT_PRESSED)
         btn.bind(on_release=lambda *_: callback())
         self.ids.actions.add_widget(btn)
 
@@ -111,7 +126,7 @@ class Notice(ModalView):
         for i, (text, callback) in enumerate(buttons):
             btn = FlatButton(text=text)
             if i == len(buttons) - 1:
-                btn.bg, btn.bg_down = get_color_from_hex("#3b82f6"), get_color_from_hex("#2563eb")
+                btn.bg, btn.bg_down = get_color_from_hex(P.ACCENT), get_color_from_hex(P.ACCENT_PRESSED)
                 btn.color = (1, 1, 1, 1)
 
             def press(*_, cb=callback):
@@ -146,7 +161,7 @@ class HistoryScreen(Screen):
         self.ids.summary.text = (f"{len(attempts)} recent attempts  ·  {posted} posted" if attempts
                                  else "Nothing posted yet.")
         for a in attempts:
-            color = RESULT_COLORS.get(a["result"], "#fbbf24")
+            color = RESULT_COLORS.get(a["result"], P.WARN)
             when = time.strftime("%d %b %H:%M", time.localtime(a["t"]))
             result = a["result"].replace("_", " ").title()
             row = ItemRow(name=f"{a['ad']}", value=f"{when}  ·  [color={color}]{result}[/color]  {a.get('message', '')[:60]}")
@@ -374,11 +389,10 @@ class RoliApp(App):
     ads_count = StringProperty("")
     update_text = StringProperty("")
     can_sign_in = BooleanProperty(droid.RolimonsLogin.available)
-    icon_path = StringProperty(str(HERE / "assets" / "icon.png") if (HERE / "assets").exists()
-                               else str(HERE.parent / "assets" / "icon.png"))
+    icon_path = StringProperty(str(asset("assets/icon.png")))
 
     def build(self):
-        Window.clearcolor = get_color_from_hex("#15181d")
+        Window.clearcolor = get_color_from_hex(P.BG)
         if not droid.IS_ANDROID:
             Window.size = (420, 880)  # phone-shaped preview window
         Window.softinput_mode = "below_target"
@@ -397,6 +411,7 @@ class RoliApp(App):
         self._last_error_seen = None
         self._update_url = ""
         self._stack: list[str] = []
+        register_fonts()
         Builder.load_file(str(HERE / "ui.kv"))
         self.sm = ScreenManager(transition=SlideTransition(duration=0.18))
         for screen in (HomeScreen(), EditScreen(), SettingsScreen(), HistoryScreen(), CookieScreen()):

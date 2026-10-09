@@ -23,7 +23,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends autoconf automake libtool pkg-config \
-            zlib1g-dev libncurses-dev cmake libffi-dev libssl-dev zip unzip lld
+            zlib1g-dev libncurses-dev cmake libffi-dev libssl-dev libltdl-dev zip unzip lld
       - run: pip install buildozer==1.6.0 cython setuptools
       - name: Bundle the shared engine into the app
         run: cp -r roliposter assets config.example.json android/

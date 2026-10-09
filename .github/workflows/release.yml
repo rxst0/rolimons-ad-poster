@@ -46,3 +46,46 @@ jobs:
             dist/RolimonsAdPosterSetup.exe
             dist/RoliAdPoster.exe
             dist/RoliAdPosterCLI.exe
+
+  android:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends autoconf automake libtool pkg-config \
+            zlib1g-dev libncurses-dev cmake libffi-dev libssl-dev libltdl-dev zip unzip lld
+      - run: pip install buildozer==1.6.0 cython setuptools
+      - name: Bundle the shared engine into the app
+        run: cp -r roliposter assets config.example.json android/
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            android/.buildozer
+          key: buildozer-release-${{ hashFiles('android/buildozer.spec') }}
+      - name: Signing key
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.keystore"
+      - name: Build signed APK
+        working-directory: android
+        env:
+          P4A_RELEASE_KEYSTORE: ${{ runner.temp }}/release.keystore
+          P4A_RELEASE_KEYSTORE_PASSWD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          P4A_RELEASE_KEYALIAS_PASSWD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          P4A_RELEASE_KEYALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          yes | buildozer android release
+          cp bin/*-release.apk "$RUNNER_TEMP/RolimonsAdPoster.apk"
+      - name: Attach APK to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ runner.temp }}/RolimonsAdPoster.apk

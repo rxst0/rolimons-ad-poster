@@ -206,7 +206,8 @@ class RolimonsLogin:
 
         layout = LinearLayout(activity)
         layout.setOrientation(LinearLayout.VERTICAL)
-        layout.setBackgroundColor(Color.parseColor("#15181d"))
+        from roliposter.palette import BG
+        layout.setBackgroundColor(Color.parseColor(BG))
         close = Button(activity)
         close.setText(_jstr("Done"))
         self._listener = ClickListener(self.close)

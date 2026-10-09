@@ -1,31 +1,32 @@
-"""Flat dark-grey + blue ttk theme (built on 'clam') for the desktop app."""
+"""Flat dark-grey + blue ttk theme (built on 'clam') for the desktop app. Colors and font come from
+palette.py, which the Android app shares."""
 import tkinter as tk
 from tkinter import ttk
 
-BG = "#15181d"          # window background
-SURFACE = "#1d2127"     # cards and dialogs
-RAISED = "#262b33"      # buttons, headings
-FIELD = "#22272e"       # inputs, tables
-STRIPE = "#262b33"      # alternate table rows
-BORDER = "#323843"
-HOVER = "#2e3540"
-TEXT = "#e6e9ee"
-MUTED = "#8b94a3"
-ACCENT = "#3b82f6"
-ACCENT_HOVER = "#5592f7"
-ACCENT_PRESSED = "#2563eb"
-SELECT = "#2a5bd7"
-BANNER = "#1e3a8a"
-OK = "#4ade80"
-WARN = "#fbbf24"
-BAD = "#f87171"
+from .palette import (ACCENT, ACCENT_HOVER, ACCENT_PRESSED, BAD, BANNER, BG, BORDER, FIELD,  # noqa: F401
+                      FONT_FAMILY, FONT_FILES, HOVER, MUTED, OK, RAISED, SELECT, STRIPE, SURFACE, TEXT, WARN)
+from .paths import resource_path
 
-FONT = ("Segoe UI", 10)
-FONT_SEMIBOLD = ("Segoe UI", 10, "bold")
-FONT_SMALL = ("Segoe UI", 9)
-FONT_TITLE = ("Segoe UI", 12, "bold")
-FONT_HEADER = ("Segoe UI", 17, "bold")
-FONT_STATUS = ("Segoe UI", 16, "bold")
+
+def _load_bundled_font() -> str:
+    """Registers Inter for this process only (nothing is installed). Falls back to Segoe UI."""
+    try:
+        import ctypes
+        fr_private = 0x10
+        loaded = [ctypes.windll.gdi32.AddFontResourceExW(str(resource_path(f)), fr_private, 0)
+                  for f in FONT_FILES.values() if resource_path(f).exists()]
+        return FONT_FAMILY if loaded and all(loaded) else "Segoe UI"
+    except (ImportError, AttributeError, OSError):
+        return "Segoe UI"
+
+
+FAMILY = _load_bundled_font()
+FONT = (FAMILY, 10)
+FONT_SEMIBOLD = (FAMILY, 10, "bold")
+FONT_SMALL = (FAMILY, 9)
+FONT_TITLE = (FAMILY, 12, "bold")
+FONT_HEADER = (FAMILY, 17, "bold")
+FONT_STATUS = (FAMILY, 16, "bold")
 FONT_MONO = ("Consolas", 9)
 
 COLORS = {"ok": OK, "warn": WARN, "bad": BAD, "muted": MUTED, "accent": ACCENT, "text": TEXT}
@@ -78,8 +79,8 @@ def apply_theme(root: tk.Tk) -> None:
     accent_states = [("disabled", RAISED), ("pressed", ACCENT_PRESSED), ("active", ACCENT_HOVER)]
     style.map("Accent.TButton", background=accent_states, bordercolor=accent_states,
               lightcolor=accent_states, darkcolor=accent_states, foreground=[("disabled", MUTED)])
-    style.configure("Big.Accent.TButton", padding=(30, 12), font=("Segoe UI", 11, "bold"))
-    style.configure("Big.TButton", padding=(30, 12), font=("Segoe UI", 11, "bold"))
+    style.configure("Big.Accent.TButton", padding=(30, 12), font=(FAMILY, 11, "bold"))
+    style.configure("Big.TButton", padding=(30, 12), font=(FAMILY, 11, "bold"))
     _flat(style, "Ghost.TButton", BG, foreground=TEXT, padding=(12, 6))
     ghost_states = [("pressed", BORDER), ("active", RAISED)]
     style.map("Ghost.TButton", background=ghost_states, bordercolor=ghost_states,
@@ -103,7 +104,7 @@ def apply_theme(root: tk.Tk) -> None:
     style.configure("Treeview", background=FIELD, fieldbackground=FIELD, foreground=TEXT, rowheight=30,
                     bordercolor=BORDER, lightcolor=FIELD, darkcolor=FIELD, borderwidth=1, relief="flat")
     style.map("Treeview", background=[("selected", SELECT)], foreground=[("selected", "#ffffff")])
-    _flat(style, "Treeview.Heading", RAISED, foreground=MUTED, font=("Segoe UI", 9, "bold"),
+    _flat(style, "Treeview.Heading", RAISED, foreground=MUTED, font=(FAMILY, 9, "bold"),
           padding=(8, 6), relief="flat")
     style.map("Treeview.Heading", background=[("active", HOVER)], lightcolor=[("active", HOVER)],
               darkcolor=[("active", HOVER)], bordercolor=[("active", HOVER)])

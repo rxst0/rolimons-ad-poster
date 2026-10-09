@@ -3,20 +3,21 @@
 #:import sp kivy.metrics.sp
 #:import SlideTransition kivy.uix.screenmanager.SlideTransition
 
-#:set BG hex('#15181d')
-#:set SURFACE hex('#1d2127')
-#:set RAISED hex('#262b33')
-#:set FIELD hex('#22272e')
-#:set BORDER hex('#323843')
-#:set HOVER hex('#2e3540')
-#:set TEXT hex('#e6e9ee')
-#:set MUTED hex('#8b94a3')
-#:set ACCENT hex('#3b82f6')
-#:set ACCENT_PRESSED hex('#2563eb')
-#:set BANNER hex('#1e3a8a')
-#:set WARN hex('#fbbf24')
-#:set BAD hex('#f87171')
-#:set OK hex('#4ade80')
+#:import P roliposter.palette
+#:set BG hex(P.BG)
+#:set SURFACE hex(P.SURFACE)
+#:set RAISED hex(P.RAISED)
+#:set FIELD hex(P.FIELD)
+#:set BORDER hex(P.BORDER)
+#:set HOVER hex(P.HOVER)
+#:set TEXT hex(P.TEXT)
+#:set MUTED hex(P.MUTED)
+#:set ACCENT hex(P.ACCENT)
+#:set ACCENT_PRESSED hex(P.ACCENT_PRESSED)
+#:set BANNER hex(P.BANNER)
+#:set WARN hex(P.WARN)
+#:set BAD hex(P.BAD)
+#:set OK hex(P.OK)
 
 # ---- building blocks ---------------------------------------------------------
 <Txt@Label>:
@@ -182,7 +183,7 @@
     padding: dp(8), dp(6)
     canvas.before:
         Color:
-            rgba: (hex('#3a2f12') if root.warn else FIELD)
+            rgba: (hex(P.WARN_BG) if root.warn else FIELD)
         RoundedRectangle:
             pos: self.pos
             size: self.size
@@ -416,7 +417,7 @@
                     height: dp(46)
                     spacing: dp(10)
                     Label:
-                        text: 'Your ads   [size=' + str(int(sp(13))) + '][color=#8b94a3]' + app.ads_count + '[/color][/size]'
+                        text: 'Your ads   [size=' + str(int(sp(13))) + '][color=' + P.MUTED + ']' + app.ads_count + '[/color][/size]'
                         markup: True
                         bold: True
                         font_size: sp(18)

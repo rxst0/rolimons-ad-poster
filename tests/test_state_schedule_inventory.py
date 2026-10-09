@@ -13,7 +13,7 @@ def test_quota_waits_for_oldest_post(tmp_path):
     now = time.time()
     h.posts = [{"t": now - 3600 * i, "ad": "x"} for i in range(3)]
     assert h.seconds_until_quota(4) == 0
-    assert 20 * 3600 < h.seconds_until_quota(3) < 22 * 3600
+    assert 21.9 * 3600 < h.seconds_until_quota(3) <= 22 * 3600  # oldest blocking post was 2h ago
 
 
 def test_attempts_are_capped_and_persisted(tmp_path):

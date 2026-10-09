@@ -245,6 +245,7 @@
             halign: 'left'
             valign: 'middle'
             shorten: True
+            shorten_from: 'right'
         Label:
             text: root.summary
             color: MUTED
@@ -253,6 +254,7 @@
             halign: 'left'
             valign: 'middle'
             shorten: True
+            shorten_from: 'right'
         Label:
             text: root.badge
             color: WARN if root.warned else (OK if root.active else MUTED)
@@ -320,18 +322,20 @@
             Label:
                 text: 'Rolimons Ad Poster'
                 bold: True
-                font_size: sp(19)
+                font_size: sp(17)
                 color: TEXT
                 text_size: self.size
                 halign: 'left'
                 valign: 'middle'
+                shorten: True
+                shorten_from: 'right'
             GhostButton:
                 text: 'History'
-                font_size: sp(14)
+                font_size: sp(13)
                 on_release: app.show('history')
             GhostButton:
                 text: 'Settings'
-                font_size: sp(14)
+                font_size: sp(13)
                 on_release: app.show('settings')
         ScrollView:
             do_scroll_x: False
@@ -400,13 +404,14 @@
                         text: app.cookie_text
                         color: {'ok': OK, 'warn': WARN, 'bad': BAD}[app.cookie_state]
                     BoxLayout:
+                        orientation: 'vertical'
                         size_hint_y: None
-                        height: dp(46)
+                        height: dp(102) if app.can_sign_in else dp(46)
                         spacing: dp(10) if app.can_sign_in else 0
                         AccentButton:
                             text: 'Sign in to Rolimons' if app.can_sign_in else ''
                             opacity: 1 if app.can_sign_in else 0
-                            size_hint_x: 1 if app.can_sign_in else 0.0001
+                            height: dp(46) if app.can_sign_in else 0
                             on_release: app.sign_in() if app.can_sign_in else None
                         FlatButton:
                             text: 'Paste cookie'
@@ -425,10 +430,12 @@
                         text_size: self.size
                         halign: 'left'
                         valign: 'middle'
+                        shorten: True
+                        shorten_from: 'right'
                     AccentButton:
                         text: '+  New ad'
                         size_hint_x: None
-                        width: dp(120)
+                        width: dp(112)
                         on_release: app.new_ad()
 
                 BoxLayout:

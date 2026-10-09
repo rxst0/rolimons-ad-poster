@@ -280,7 +280,7 @@ class EditScreen(Screen):
             box.clear_widgets()
             for i, item_id in enumerate(ids):
                 row = app.item_row(item_id, warn=side == "offer" and item_id in missing)
-                row.add_action("✕", lambda s=side, n=i: self.remove(s, n))
+                row.add_action("×", lambda s=side, n=i: self.remove(s, n))
                 box.add_widget(row)
             if not ids:
                 box.add_widget(Label(text="Nothing yet: search below to add items.", color=(0.55, 0.58, 0.64, 1),

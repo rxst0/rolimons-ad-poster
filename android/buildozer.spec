@@ -12,8 +12,8 @@ source.exclude_dirs = .devdata, bin, .buildozer, __pycache__
 version.regex = __version__ = "(.*)"
 version.filename = %(source.dir)s/roliposter/__init__.py
 
-# charset-normalizer 2.x is pure Python (3.x ships host-compiled extensions that break on Android).
-requirements = python3,kivy==2.3.1,requests,urllib3,certifi,idna,charset-normalizer==2.1.1,pyjnius,android
+# requests pulls in charset-normalizer, which publishes a pure-Python wheel that works on Android.
+requirements = python3,kivy==2.3.1,requests,urllib3,certifi,idna,charset-normalizer,pyjnius,android
 
 icon.filename = %(source.dir)s/assets/icon-512.png
 # Adaptive icon (Android 8+): same artwork as the PC icon, cropped to each launcher's shape.

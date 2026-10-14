@@ -10,7 +10,9 @@ import time
 import traceback
 from pathlib import Path
 
+from kivy.base import EventLoop
 from kivy.clock import Clock
+from kivy.input.motionevent import MotionEvent
 from kivy.core.window import Window
 from kivy.logger import Logger
 from kivy.uix.modalview import ModalView
@@ -21,6 +23,31 @@ from roliposter.config import load_config
 from roliposter.paths import config_path
 
 AD_NAME = "Selftest ad"
+
+
+class _Touch(MotionEvent):
+    """A simulated finger (same idea as kivy.tests.common.UnitTestTouch, which isn't in the APK)."""
+
+    def __init__(self, x, y):
+        win = EventLoop.window
+        super().__init__("selftest", 99, {"x": x / (win.width - 1.0), "y": y / (win.height - 1.0)},
+                         is_touch=True, type_id="touch")
+        self.profile = ["pos"]
+
+    def depack(self, args):
+        self.sx, self.sy = args["x"], args["y"]
+        super().depack(args)
+
+    def touch_down(self):
+        EventLoop.post_dispatch_input("begin", self)
+
+    def touch_move(self, x, y):
+        win = EventLoop.window
+        self.move({"x": x / (win.width - 1.0), "y": y / (win.height - 1.0)})
+        EventLoop.post_dispatch_input("update", self)
+
+    def touch_up(self):
+        EventLoop.post_dispatch_input("end", self)
 
 
 def _fake_cookie(player_id: int) -> str:
@@ -64,9 +91,8 @@ class SelfTest:
     @staticmethod
     def swipe(direction: int, start=None) -> None:
         """Simulates a finger swipe: direction -1 = swipe left (next tab), +1 = swipe right."""
-        from kivy.tests.common import UnitTestTouch
         x, y = start or (Window.width * 0.5, Window.height * 0.6)
-        touch = UnitTestTouch(x, y)
+        touch = _Touch(x, y)
         touch.touch_down()
         for step in range(1, 9):
             touch.touch_move(x + direction * Window.width * 0.05 * step, y + step)

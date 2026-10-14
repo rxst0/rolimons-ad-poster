@@ -62,6 +62,17 @@ class SelfTest:
         Window.screenshot(name=str(self.shots / f"{name}.png"))
 
     @staticmethod
+    def swipe(direction: int, start=None) -> None:
+        """Simulates a finger swipe: direction -1 = swipe left (next tab), +1 = swipe right."""
+        from kivy.tests.common import UnitTestTouch
+        x, y = start or (Window.width * 0.5, Window.height * 0.6)
+        touch = UnitTestTouch(x, y)
+        touch.touch_down()
+        for step in range(1, 9):
+            touch.touch_move(x + direction * Window.width * 0.05 * step, y + step)
+        touch.touch_up()
+
+    @staticmethod
     def dismiss_popups() -> None:
         for widget in list(Window.children):
             if isinstance(widget, ModalView):
@@ -203,6 +214,29 @@ class SelfTest:
         app.go_back()
         yield 1
         self.record("back from a tab returns to Ads", app.sm.current == "home")
+
+        # Swiping between tabs (left = next tab, right = previous).
+        app.switch_tab("history")
+        yield 1
+        self.swipe(-1)
+        yield 1
+        went_next = app.sm.current == "settings"
+        self.swipe(+1)
+        yield 1
+        self.record("swiping moves between tabs", went_next and app.sm.current == "history", app.sm.current)
+        # A swipe that starts on an ad card changes tab instead of opening the ad.
+        app.switch_tab("home")
+        yield 1
+        cards = app.sm.get_screen("home").ids.ads_box.children
+        if cards:
+            card = cards[-1]
+            cx, cy = card.to_window(card.center_x, card.center_y)
+            self.swipe(-1, start=(cx, cy))
+            yield 1
+            self.record("swiping across an ad card doesn't open it", app.sm.current == "trades",
+                        f"now on {app.sm.current}; swipe started at {cx:.0f},{cy:.0f} in a {Window.width}x{Window.height} window")
+        app.switch_tab("home")
+        yield 1
 
         if droid.TradesView.available:
             yield from self.trades_steps()

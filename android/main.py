@@ -474,6 +474,46 @@ class EditScreen(Screen):
 
 
 # ---- app -----------------------------------------------------------------------
+class SwipeManager(ScreenManager):
+    """Swipe left/right on a main tab to go to the next/previous tab.
+
+    A mostly-horizontal drag counts as a swipe; it cancels any button press it started on (so swiping
+    across an ad card doesn't open it). Screens that aren't tabs (ad editor, item picker) ignore swipes.
+    """
+    START = 24  # dp of horizontal travel before a drag counts as a swipe
+    MIN = 70    # dp of travel needed to change tab
+
+    def on_touch_down(self, touch):
+        touch.ud["swipe_start"] = (touch.x, touch.y)
+        return super().on_touch_down(touch)
+
+    def on_touch_move(self, touch):
+        from kivy.metrics import dp
+        start = touch.ud.get("swipe_start")
+        if start and not touch.ud.get("swiping") and self.current in TABS:
+            dx, dy = touch.x - start[0], touch.y - start[1]
+            if abs(dx) > dp(self.START) and abs(dx) > 2 * abs(dy):
+                touch.ud["swiping"] = True
+                for ref in list(touch.grab_list):  # cancel presses/scrolls this touch started
+                    widget = ref() if callable(ref) else ref
+                    if widget is not None and widget is not self:
+                        touch.ungrab(widget)
+                        if hasattr(widget, "state"):
+                            widget.state = "normal"
+        if touch.ud.get("swiping"):
+            return True
+        return super().on_touch_move(touch)
+
+    def on_touch_up(self, touch):
+        from kivy.metrics import dp
+        if touch.ud.get("swiping"):
+            dx = touch.x - touch.ud["swipe_start"][0]
+            if abs(dx) >= dp(self.MIN):
+                App.get_running_app().swipe_tab(1 if dx < 0 else -1)
+            return True
+        return super().on_touch_up(touch)
+
+
 class RoliApp(App):
     title = "Rolimons Ad Poster"
     running = BooleanProperty(False)
@@ -512,7 +552,7 @@ class RoliApp(App):
         if Metrics.fontscale > 1.2:  # very large system font sizes would push text out of the layout
             Metrics.fontscale = 1.2
         Builder.load_file(str(HERE / "ui.kv"))
-        self.sm = ScreenManager(transition=SlideTransition(duration=0.18))
+        self.sm = SwipeManager(transition=SlideTransition(duration=0.18))
         for screen in (HomeScreen(), EditScreen(), SettingsScreen(), HistoryScreen(), CookieScreen(),
                        TradesScreen(), HelpScreen(), PickerScreen()):
             self.sm.add_widget(screen)
@@ -584,6 +624,14 @@ class RoliApp(App):
         current = self.sm.current if self.sm.current in order else "home"
         self.sm.transition.direction = "left" if order.index(name) > order.index(current) else "right"
         self.sm.current = name
+
+    def swipe_tab(self, step: int):
+        """Swipe left (step +1) / right (step -1) between the main tabs, in tab-bar order."""
+        order = list(TABS)
+        if self.sm.current in order:
+            target = order.index(self.sm.current) + step
+            if 0 <= target < len(order):
+                self.switch_tab(order[target])
 
     def go_back(self):
         if self._stack:

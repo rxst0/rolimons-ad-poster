@@ -81,6 +81,15 @@ def apply_theme(root: tk.Tk) -> None:
               lightcolor=accent_states, darkcolor=accent_states, foreground=[("disabled", MUTED)])
     style.configure("Big.Accent.TButton", padding=(30, 12), font=(FAMILY, 11, "bold"))
     style.configure("Big.TButton", padding=(30, 12), font=(FAMILY, 11, "bold"))
+    # Tab bar: plain text on the window background; the active tab is brighter (a blue bar sits under it).
+    _flat(style, "Tab.TButton", BG, foreground=MUTED, padding=(16, 9), font=FONT_SEMIBOLD)
+    tab_states = [("pressed", RAISED), ("active", SURFACE)]
+    style.map("Tab.TButton", background=tab_states, bordercolor=tab_states, lightcolor=tab_states,
+              darkcolor=tab_states, foreground=[("active", TEXT)])
+    _flat(style, "TabActive.TButton", BG, foreground=TEXT, padding=(16, 9), font=FONT_SEMIBOLD)
+    style.map("TabActive.TButton", background=tab_states, bordercolor=tab_states, lightcolor=tab_states,
+              darkcolor=tab_states)
+    style.configure("AppSection.TLabel", background=BG, font=FONT_TITLE)
     _flat(style, "Ghost.TButton", BG, foreground=TEXT, padding=(12, 6))
     ghost_states = [("pressed", BORDER), ("active", RAISED)]
     style.map("Ghost.TButton", background=ghost_states, bordercolor=ghost_states,

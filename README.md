@@ -16,7 +16,7 @@ Fully open source, with no servers involved: each device posts on its own.
 - Windows notifications when posting stops, when your cookie is about to expire, or when an update is out
 - Optional posting hours (for example 09:00–23:00), a post history, and a "Skip to next ad" button
 - Value checks: warns about overpaying ads and can favor high-demand ads
-- **Trades (PC):** see the trades people send you on Roblox, in a view-only window
+- **Received trades (PC):** see the trades people send you on Roblox, view-only, in its own tab
 
 ## Download (Windows)
 
@@ -77,13 +77,15 @@ Right-click the tray icon to open, stop, skip or quit.
 
 ## Viewing your Roblox trades (PC)
 
-Click **Trades** to open Roblox's own trades page (inbound, outbound, completed) in a separate window, and
-sign in to Roblox there like in a browser.
+Everything lives in one window with tabs: **Ad poster**, **Received trades**, **History**, **Settings** and
+**Help**. The **Received trades** tab shows Roblox's own trades page (inbound, outbound, completed); sign in
+to Roblox inside it the first time, like in a browser.
 
-- **View only.** Accepting, declining, countering and sending are blocked inside the window before anything
-  leaves your PC, and those buttons are hidden. Respond to trades on roblox.com or in the Roblox app.
-- **Your Roblox login stays in that window.** It uses Microsoft Edge WebView2 (built into Windows 10 and 11).
-  The sign-in is kept in the window's own browser profile (`roblox-session` next to the app, encrypted by
+- **View only.** Accepting, declining, countering and sending are blocked inside the tab before anything
+  leaves your PC, and those buttons are hidden. Respond to trades on roblox.com or in the Roblox app
+  (**Open on roblox.com** opens your normal browser).
+- **Your Roblox login stays in that tab.** It uses Microsoft Edge WebView2 (built into Windows 10 and 11).
+  The sign-in is kept in the tab's own browser profile (`roblox-session` next to the app, encrypted by
   Windows like Edge's cookies). This app's code never reads, copies or sends it.
 - **Sign out:** Settings → *Sign out of Roblox*, or uninstall the app (which deletes that folder).
 
@@ -144,7 +146,7 @@ The CLI reads `config.json` (see `config.example.json`) and the cookie from `.en
 Code layout (`roliposter/`): `api.py` (Rolimons requests and replies), `poster.py` (timer loop, rotation,
 retries), `inventory.py` (owned items), `schedule.py` (posting hours), `items.py` / `values.py`
 (item catalog and value checks), `thumbs.py` (item pictures), `tray.py`, `autostart.py`, `updates.py`,
-`theme.py`, `trades_viewer.py` (view-only Roblox trades window), `config.py`, `cookie.py`, `state.py`, `startup.py`.
+`theme.py`, `trades_viewer.py` (view-only rules for the trades tab), `webview_embed.py` (WebView2 inside Tk), `config.py`, `cookie.py`, `state.py`, `startup.py`.
 
 ### Android app
 The Android app lives in `android/` (Kivy) and bundles the same `roliposter` engine. Posting runs in a

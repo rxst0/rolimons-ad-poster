@@ -3,13 +3,11 @@ import copy
 import logging
 import queue
 import re
-import subprocess
 import sys
 import threading
 import time
 import tkinter as tk
 import webbrowser
-from pathlib import Path
 from tkinter import messagebox, ttk
 
 import requests
@@ -23,7 +21,7 @@ from roliposter.cookie import (COOKIE_ENV_VAR, clean_cookie, cookie_info, get_co
 from roliposter.inventory import Inventory, fetch_inventory, missing_offer_items
 from roliposter.items import ItemCatalog
 from roliposter.logsetup import REDACTOR, setup_logging
-from roliposter.paths import app_dir, cache_dir, config_path, env_path, log_dir, resource_path, state_path
+from roliposter.paths import cache_dir, config_path, env_path, log_dir, resource_path, state_path
 from roliposter.poster import AuthError, Poster, fmt_duration
 from roliposter.startup import StartupError, fetch_catalog_with_retry, prepare
 from roliposter.state import PostHistory
@@ -66,12 +64,13 @@ GETTING STARTED
    "Skip" jumps to the following ad. Click "Stop" any time.
 
 ROBLOX TRADES (VIEW ONLY)
-- Click "Trades" to see the trades people send you, on Roblox's own trades
-  page in a separate window. Sign in to Roblox inside that window.
+- The "Received trades" tab shows the trades people send you, on Roblox's own
+  trades page. Sign in to Roblox inside that tab the first time.
 - It is view-only: accepting, declining, countering and sending are blocked
-  inside the window. Respond to trades on roblox.com or in the Roblox app.
-- This app never reads or stores your Roblox login; the sign-in stays in that
-  window's own browser profile. Settings > Sign out of Roblox removes it.
+  inside the tab. Respond to trades on roblox.com or in the Roblox app
+  ("Open on roblox.com" opens it in your normal browser).
+- This app never reads or stores your Roblox login; the sign-in stays in the
+  tab's own browser profile. Settings > Sign out of Roblox removes it.
 
 RUNNING IN THE BACKGROUND
 - While posting, closing the window keeps the app running in the system
@@ -467,12 +466,26 @@ class CookieDialog(Dialog):
         self.destroy()
 
 
-class SettingsDialog(Dialog):
-    def __init__(self, app: "App"):
-        super().__init__(app, "Settings")
+class Page(ttk.Frame):
+    """The content of one tab. refresh() runs every time the tab is shown."""
+
+    def __init__(self, parent: tk.Misc, app: "App"):
+        super().__init__(parent, style="App.TFrame")
         self.app = app
-        c = app.cfg
-        cols = ttk.Frame(self.body)
+
+    def refresh(self) -> None:
+        pass
+
+
+class SettingsPage(Page):
+    def refresh(self) -> None:
+        # Rebuilt each time it's shown, so it always reflects the current settings.
+        for child in self.winfo_children():
+            child.destroy()
+        c = self.app.cfg
+        outer = card(self)
+        outer.pack(fill="both", expand=True)
+        cols = ttk.Frame(outer)
         cols.pack(fill="both", expand=True)
         left, right = ttk.Frame(cols), ttk.Frame(cols)
         left.pack(side="left", fill="both", expand=True, anchor="n")
@@ -497,6 +510,11 @@ class SettingsDialog(Dialog):
             ttk.Checkbutton(col, text=text, variable=var).grid(row=rows[col], column=0, columnspan=2, sticky="w", pady=2)
             rows[col] += 1
             return var
+
+        def note(col, text):
+            ttk.Label(col, style="Muted.TLabel", justify="left", wraplength=320, text=text).grid(
+                row=rows[col], column=0, columnspan=2, sticky="w", pady=(4, 0))
+            rows[col] += 1
 
         # Left column: posting behaviour
         section(left, "Posting")
@@ -547,29 +565,26 @@ class SettingsDialog(Dialog):
         self.var_auto = check(right, "Start posting automatically when the app opens", a.auto_start_posting)
         self.var_notify = check(right, "Show notifications", a.notifications)
         self.var_updates = check(right, "Check for updates", a.check_updates)
-        ttk.Label(right, style="Muted.TLabel", justify="left", wraplength=300, text=(
-            "Tip: turn on \"Start with Windows\" and \"Start posting automatically\" to keep "
-            "ads going without opening the app.")).grid(row=rows[right], column=0, columnspan=2, sticky="w", pady=(10, 0))
-        rows[right] += 1
+        note(right, "Tip: turn on \"Start with Windows\" and \"Start posting automatically\" to keep "
+                    "ads going without opening the app.")
 
         section(right, "Roblox trades")
-        ttk.Label(right, style="Muted.TLabel", justify="left", wraplength=300, text=(
-            "The Trades window is view-only. Your Roblox sign-in stays inside that window; this app "
-            "never reads it.")).grid(row=rows[right], column=0, columnspan=2, sticky="w")
-        rows[right] += 1
+        note(right, "The Received trades tab is view-only. Your Roblox sign-in stays inside that tab's "
+                    "browser; this app never reads it.")
         ttk.Button(right, text="Sign out of Roblox", command=self._forget_roblox).grid(
-            row=rows[right], column=0, columnspan=2, sticky="w", pady=(8, 0))
+            row=rows[right], column=0, columnspan=2, sticky="w", pady=(10, 0))
+        rows[right] += 1
 
-        ttk.Separator(self.body).pack(fill="x", pady=16)
-        self.footer(self.body, "Save", self._save).pack(fill="x")
-        self.show()
+        ttk.Separator(outer).pack(fill="x", pady=16)
+        foot = ttk.Frame(outer)
+        foot.pack(fill="x")
+        self.saved = ttk.Label(foot, text="", style="Muted.TLabel")
+        self.saved.pack(side="left")
+        ttk.Button(foot, text="Save settings", style="Accent.TButton", command=self._save).pack(side="right")
 
     def _forget_roblox(self) -> None:
-        if self.app.trades_open():
-            messagebox.showinfo("Roblox trades", "Close the Trades window first.", parent=self)
-        elif trades_viewer.forget_login():
-            messagebox.showinfo("Roblox trades", "Signed out. The Trades window will ask you to sign in again.",
-                                parent=self)
+        if self.app.trades_page.sign_out():
+            messagebox.showinfo("Roblox trades", "Signed out of Roblox in this app.", parent=self)
         else:
             messagebox.showinfo("Roblox trades", "You're not signed in to Roblox in this app.", parent=self)
 
@@ -612,49 +627,54 @@ class SettingsDialog(Dialog):
             return
         self.app.cfg = c
         self.app.persist()
-        self.destroy()
+        self.saved.config(text="✓  Settings saved", foreground=C["ok"])
+        self.after(3000, lambda: self.saved.winfo_exists() and self.saved.config(text=""))
 
 
-class HistoryDialog(Dialog):
+class HistoryPage(Page):
     RESULT_TAGS = {"SUCCESS": "ok", "COOLDOWN": "warn", "RATE_LIMITED": "warn", "AUTH_ERROR": "bad",
                    "REJECTED": "bad", "NETWORK_ERROR": "warn", "SERVER_ERROR": "warn"}
 
-    def __init__(self, app: "App"):
-        super().__init__(app, "Post history")
-        self.minsize(820, 460)
-        b = self.body
-        attempts = list(reversed(PostHistory(state_path()).attempts))
-        posted = sum(1 for a in attempts if a["result"] == "SUCCESS")
-        head = ttk.Frame(b)
-        head.pack(fill="x", pady=(0, 10))
-        ttk.Label(head, text="Post history", style="Title.TLabel").pack(side="left")
-        ttk.Label(head, text=f"{len(attempts)} attempts  ·  {posted} posted", style="Muted.TLabel").pack(
-            side="left", padx=(10, 0), pady=(3, 0))
-        wrap, tree = scrolled_tree(b, ("when", "ad", "result", "message"), 14)
+    def __init__(self, parent: tk.Misc, app: "App"):
+        super().__init__(parent, app)
+        outer = card(self, "Post history")
+        outer.pack(fill="both", expand=True)
+        self.summary = ttk.Label(outer.head, text="", style="Muted.TLabel")
+        self.summary.pack(side="left", padx=(10, 0), pady=(3, 0))
+        ttk.Button(outer.head, text="Refresh", command=self.refresh).pack(side="right")
+        wrap, self.tree = scrolled_tree(outer, ("when", "ad", "result", "message"), 14)
         for col, text, width in (("when", "WHEN", 150), ("ad", "AD", 190), ("result", "RESULT", 120),
                                  ("message", "DETAILS", 320)):
-            tree.heading(col, text=text, anchor="w")
-            tree.column(col, width=width, stretch=col == "message")
+            self.tree.heading(col, text=text, anchor="w")
+            self.tree.column(col, width=width, stretch=col == "message")
+        wrap.pack(fill="both", expand=True)
+        self.empty = ttk.Label(wrap, text="Nothing posted yet.", style="Muted.TLabel", background=theme.FIELD)
+
+    def refresh(self) -> None:
+        attempts = list(reversed(PostHistory(state_path()).attempts))
+        posted = sum(1 for a in attempts if a["result"] == "SUCCESS")
+        self.summary.config(text=f"{len(attempts)} attempts  ·  {posted} posted")
+        self.tree.delete(*self.tree.get_children())
         for n, a in enumerate(attempts):
             when = time.strftime("%d %b  %H:%M:%S", time.localtime(a["t"]))
             result = a["result"].replace("_", " ").title()
             tags = (("odd",) if n % 2 else ()) + (self.RESULT_TAGS.get(a["result"], ""),)
-            tree.insert("", "end", values=(when, a["ad"], result, a.get("message", "")), tags=tags)
-        wrap.pack(fill="both", expand=True)
-        if not attempts:
-            ttk.Label(wrap, text="Nothing posted yet.", style="Muted.TLabel", background=theme.FIELD).place(
-                relx=0.5, rely=0.5, anchor="center")
-        foot = self.footer(b, "Close", self.destroy, cancel=False)
-        foot.pack(fill="x", pady=(16, 0))
-        self.show()
+            self.tree.insert("", "end", values=(when, a["ad"], result, a.get("message", "")), tags=tags)
+        if attempts:
+            self.empty.place_forget()
+        else:
+            self.empty.place(relx=0.5, rely=0.5, anchor="center")
 
 
-class HelpDialog(Dialog):
-    def __init__(self, app: "App"):
-        super().__init__(app, "How to use")
-        box = ttk.Frame(self.body)
+class HelpPage(Page):
+    def __init__(self, parent: tk.Misc, app: "App"):
+        super().__init__(parent, app)
+        outer = card(self, "How to use")
+        outer.pack(fill="both", expand=True)
+        ttk.Button(outer.head, text="Open GitHub page", command=lambda: webbrowser.open(REPO_URL)).pack(side="right")
+        box = ttk.Frame(outer)
         box.pack(fill="both", expand=True)
-        text = tk.Text(box, width=80, height=30, wrap="word", font=theme.FONT, padx=14, pady=12,
+        text = tk.Text(box, wrap="word", font=theme.FONT, padx=14, pady=12, height=10,
                        **theme.text_widget_options())
         bar = ttk.Scrollbar(box, orient="vertical", command=text.yview)
         text.configure(yscrollcommand=bar.set)
@@ -662,22 +682,90 @@ class HelpDialog(Dialog):
         text.config(state="disabled")
         text.pack(side="left", fill="both", expand=True)
         bar.pack(side="right", fill="y")
-        foot = self.footer(self.body, "Got it", self.destroy, cancel=False)
-        ttk.Button(foot, text="Open GitHub page", command=lambda: webbrowser.open(REPO_URL)).pack(side="left")
-        foot.pack(fill="x", pady=(16, 0))
-        self.show()
+
+
+class TradesPage(Page):
+    """Roblox's own trades page, embedded and view-only (see roliposter/trades_viewer.py)."""
+
+    def __init__(self, parent: tk.Misc, app: "App"):
+        super().__init__(parent, app)
+        self.view = None
+        bar = ttk.Frame(self, style="App.TFrame")
+        bar.pack(fill="x", pady=(0, 10))
+        ttk.Label(bar, text="Received trades", style="AppSection.TLabel").pack(side="left")
+        ttk.Label(bar, text="View only  ·  respond on roblox.com or in the Roblox app",
+                  style="AppMuted.TLabel").pack(side="left", padx=(12, 0), pady=(4, 0))
+        ttk.Button(bar, text="Open on roblox.com", style="Ghost.TButton",
+                   command=lambda: webbrowser.open(trades_viewer.TRADES_URL)).pack(side="right")
+        ttk.Button(bar, text="Reload", style="Ghost.TButton", command=self._reload).pack(side="right", padx=(0, 4))
+        ttk.Button(bar, text="Inbound", style="Ghost.TButton",
+                   command=lambda: self._go(trades_viewer.TRADES_URL)).pack(side="right", padx=(0, 4))
+        self.host = tk.Frame(self, bg=theme.BG, highlightthickness=1, highlightbackground=theme.BORDER)
+        self.host.pack(fill="both", expand=True)
+        self.message = ttk.Label(self.host, text="Loading Roblox...", style="AppMuted.TLabel")
+        self.message.place(relx=0.5, rely=0.5, anchor="center")
+        self.host.bind("<Configure>", self._on_resize)
+
+    def refresh(self) -> None:
+        if self.view is None:
+            self.after(60, self._start)
+
+    def _start(self) -> None:
+        if self.view is not None:
+            return
+        from roliposter.webview_embed import EmbeddedWebView
+        self.host.update_idletasks()
+        self.view = EmbeddedWebView(
+            self.host.winfo_id(), trades_viewer.TRADES_URL, trades_viewer.session_dir(),
+            background=theme.BG, document_script=trades_viewer.VIEW_ONLY_JS,
+            guard_filter=trades_viewer.GUARD_FILTER, request_guard=trades_viewer.view_only_guard,
+            on_error=lambda message: self.app.events.put(("trades_error", message)))
+        try:
+            self.view.start(self.host.winfo_width(), self.host.winfo_height())
+        except Exception as e:
+            self.show_error(f"The built-in browser couldn't start: {e}")
+
+    def show_error(self, message: str) -> None:
+        self.view = None
+        self.message.config(text=message + "\n\nIt needs Microsoft Edge WebView2, which comes with Windows 10 and 11.",
+                            justify="center")
+
+    def _on_resize(self, event) -> None:
+        if self.view is not None:
+            self.view.resize(event.width, event.height)
+
+    def _reload(self) -> None:
+        if self.view is not None:
+            self.view.reload()
+
+    def _go(self, url: str) -> None:
+        if self.view is not None:
+            self.view.navigate(url)
+
+    def sign_out(self) -> bool:
+        """Clears the Roblox sign-in. Returns False if there was nothing to clear."""
+        if self.view is not None and self.view.ready:
+            view = self.view
+            view.clear_browsing_data(done=lambda: view.navigate(trades_viewer.TRADES_URL))
+            return True
+        return trades_viewer.forget_login()
+
+    def close(self) -> None:
+        if self.view is not None:
+            self.view.close()
+            self.view = None
 
 
 # ---- main window -----------------------------------------------------------
 class App(tk.Tk):
-    def __init__(self, start_minimized: bool = False):
+    def __init__(self, start_minimized: bool = False, start_tab: str | None = None):
         super().__init__()
         self.withdraw()
         self.title(APP_NAME)
         set_app_icon(self)
         theme.apply_theme(self)
-        self.geometry("960x800")
-        self.minsize(840, 680)
+        self.geometry("1060x840")
+        self.minsize(900, 700)
 
         self.log_queue: queue.Queue = queue.Queue()
         self.events: queue.Queue = queue.Queue()
@@ -717,8 +805,10 @@ class App(tk.Tk):
         theme.dark_title_bar(self)
         if not (start_minimized and self.tray.available):
             self.deiconify()
-        if not self.cfg.roblox_user_id and not self.cfg.ads:
-            self.after(300, lambda: HelpDialog(self))
+        if start_tab in self.pages:
+            self.show_tab(start_tab)
+        elif not self.cfg.roblox_user_id and not self.cfg.ads:
+            self.show_tab("help")
 
     def _load_cfg(self) -> Config:
         try:
@@ -745,16 +835,18 @@ class App(tk.Tk):
         tray.notify(title, message)
 
     # ---- layout --------------------------------------------------------
+    TABS = (("poster", "Ad poster"), ("trades", "Received trades"), ("history", "History"),
+            ("settings", "Settings"), ("help", "Help"))
+
     def _build(self) -> None:
-        root = ttk.Frame(self, style="App.TFrame", padding=(22, 18, 22, 20))
+        root = ttk.Frame(self, style="App.TFrame", padding=(22, 16, 22, 18))
         root.pack(fill="both", expand=True)
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(3, weight=3)
-        root.rowconfigure(5, weight=2)
+        root.rowconfigure(3, weight=1)
 
         # Header
         head = ttk.Frame(root, style="App.TFrame")
-        head.grid(row=0, column=0, sticky="ew", pady=(0, 16))
+        head.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         png = resource_path("assets/icon.png")
         if png.exists():
             self._logo = tk.PhotoImage(file=str(png)).subsample(7)
@@ -763,10 +855,23 @@ class App(tk.Tk):
         titles.pack(side="left")
         ttk.Label(titles, text=APP_NAME, style="AppTitle.TLabel").pack(anchor="w")
         ttk.Label(titles, text=f"Automatic Rolimons trade ads  ·  v{__version__}", style="AppMuted.TLabel").pack(anchor="w")
-        ttk.Button(head, text="Help", style="Ghost.TButton", command=lambda: HelpDialog(self)).pack(side="right")
-        ttk.Button(head, text="Settings", style="Ghost.TButton", command=lambda: SettingsDialog(self)).pack(side="right", padx=(0, 4))
-        ttk.Button(head, text="History", style="Ghost.TButton", command=lambda: HistoryDialog(self)).pack(side="right", padx=(0, 4))
-        ttk.Button(head, text="Trades", style="Ghost.TButton", command=self.open_trades).pack(side="right", padx=(0, 4))
+
+        # Tab bar: a blue bar marks the open tab.
+        nav = ttk.Frame(root, style="App.TFrame")
+        nav.grid(row=1, column=0, sticky="ew")
+        tabs = ttk.Frame(nav, style="App.TFrame")
+        tabs.pack(side="left")
+        tk.Frame(nav, height=1, bg=theme.BORDER).place(relx=0, rely=1.0, relwidth=1, anchor="sw")
+        self.tab_buttons: dict[str, ttk.Button] = {}
+        self.tab_marks: dict[str, tk.Frame] = {}
+        for key, label in self.TABS:
+            cell = ttk.Frame(tabs, style="App.TFrame")
+            cell.pack(side="left", padx=(0, 2))
+            btn = ttk.Button(cell, text=label, style="Tab.TButton", command=lambda k=key: self.show_tab(k))
+            btn.pack()
+            mark = tk.Frame(cell, height=3, bg=theme.BG)
+            mark.pack(fill="x")
+            self.tab_buttons[key], self.tab_marks[key] = btn, mark
 
         # Update banner (hidden until an update is found)
         self.banner = ttk.Frame(root, style="Banner.TFrame", padding=(18, 10))
@@ -778,9 +883,45 @@ class App(tk.Tk):
         self.banner_btn = ttk.Button(self.banner, text="Download", style="Accent.TButton")
         self.banner_btn.pack(side="right", padx=(0, 8))
 
+        # Tab pages, stacked in one cell; show_tab() reveals one at a time.
+        content = ttk.Frame(root, style="App.TFrame")
+        content.grid(row=3, column=0, sticky="nsew", pady=(14, 0))
+        content.rowconfigure(0, weight=1)
+        content.columnconfigure(0, weight=1)
+        poster = Page(content, self)
+        self._build_poster(poster)
+        self.trades_page = TradesPage(content, self)
+        self.pages: dict[str, Page] = {"poster": poster, "trades": self.trades_page,
+                                       "history": HistoryPage(content, self),
+                                       "settings": SettingsPage(content, self), "help": HelpPage(content, self)}
+        for page in self.pages.values():
+            page.grid(row=0, column=0, sticky="nsew")
+            page.grid_remove()
+        self.current_tab = None
+        self.show_tab("poster")
+
+    def show_tab(self, key: str) -> None:
+        if key == self.current_tab:
+            return
+        for other, page in self.pages.items():
+            if other != key:
+                page.grid_remove()
+        self.pages[key].grid()
+        self.pages[key].refresh()
+        for other, btn in self.tab_buttons.items():
+            active = other == key
+            btn.config(style="TabActive.TButton" if active else "Tab.TButton")
+            self.tab_marks[other].config(bg=theme.ACCENT if active else theme.BG)
+        self.current_tab = key
+
+    def _build_poster(self, page: ttk.Frame) -> None:
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(1, weight=3)
+        page.rowconfigure(3, weight=2)
+
         # Account
-        acc = card(root, "Account")
-        acc.grid(row=2, column=0, sticky="ew")
+        acc = card(page, "Account")
+        acc.grid(row=0, column=0, sticky="ew")
         grid = ttk.Frame(acc)
         grid.pack(fill="x")
         grid.columnconfigure(1, weight=1)
@@ -802,8 +943,8 @@ class App(tk.Tk):
         ttk.Button(cookie_row, text="Set cookie", command=lambda: CookieDialog(self)).pack(side="right")
 
         # Ads
-        ads = card(root, "Your ads")
-        ads.grid(row=3, column=0, sticky="nsew", pady=14)
+        ads = card(page, "Your ads")
+        ads.grid(row=1, column=0, sticky="nsew", pady=14)
         self.ads_count = ttk.Label(ads.head, text="", style="Muted.TLabel")
         self.ads_count.pack(side="left", padx=(10, 0), pady=(3, 0))
         ttk.Button(ads.head, text="+  New ad", style="Accent.TButton", command=self._new_ad).pack(side="right")
@@ -829,8 +970,8 @@ class App(tk.Tk):
         ttk.Button(tools, text="Delete", command=self._delete_ad).pack(side="right")
 
         # Status
-        run = card(root)
-        run.grid(row=4, column=0, sticky="ew")
+        run = card(page)
+        run.grid(row=2, column=0, sticky="ew")
         info = ttk.Frame(run)
         info.pack(side="left", fill="x", expand=True)
         self.status = ttk.Label(info, text="Stopped", style="Status.TLabel")
@@ -842,8 +983,8 @@ class App(tk.Tk):
         self.btn_skip = ttk.Button(run, text="Skip", style="Big.TButton", command=self._skip)
 
         # Activity
-        logf = card(root, "Activity")
-        logf.grid(row=5, column=0, sticky="nsew", pady=(14, 0))
+        logf = card(page, "Activity")
+        logf.grid(row=3, column=0, sticky="nsew", pady=(14, 0))
         ttk.Button(logf.head, text="Clear", command=self._clear_log).pack(side="right")
         box = ttk.Frame(logf)
         box.pack(fill="both", expand=True)
@@ -1186,7 +1327,7 @@ class App(tk.Tk):
     def _show_update(self, version: str, url: str) -> None:
         self.banner_text.config(text=f"Version {version} is available")
         self.banner_btn.config(command=lambda: webbrowser.open(url or REPO_URL + "/releases/latest"))
-        self.banner.grid(row=1, column=0, sticky="ew", pady=(0, 14))
+        self.banner.grid(row=2, column=0, sticky="ew", pady=(12, 0))
         log.info("Update available: v%s (you have v%s).", version, __version__)
         self.notify("update", "Update available", f"Rolimons Ad Poster {version} is available on GitHub.")
 
@@ -1262,6 +1403,8 @@ class App(tk.Tk):
                     listener()
             elif kind == "update":
                 self._show_update(*payload)
+            elif kind == "trades_error":
+                self.trades_page.show_error(payload)
             elif kind == "tray":
                 self._handle_tray(payload)
         self.after(100, self._poll)
@@ -1277,28 +1420,8 @@ class App(tk.Tk):
             return
         self._quit()
 
-    # ---- Roblox trades (view-only window) -----------------------------
-    def trades_open(self) -> bool:
-        proc = getattr(self, "_trades_proc", None)
-        return proc is not None and proc.poll() is None
-
-    def open_trades(self) -> None:
-        """Opens Roblox's own trades page in a separate, view-only window (see roliposter/trades_viewer.py)."""
-        if self.trades_open():
-            messagebox.showinfo(APP_NAME, "The Trades window is already open.")
-            return
-        if getattr(sys, "frozen", False):
-            cmd = [sys.executable, "--trades"]
-        else:
-            pythonw = Path(sys.executable).with_name("pythonw.exe")
-            cmd = [str(pythonw if pythonw.exists() else sys.executable), str(Path(__file__).resolve()), "--trades"]
-        try:
-            self._trades_proc = subprocess.Popen(cmd, cwd=str(app_dir()))
-            log.info("Opened the Roblox trades window (view only).")
-        except OSError as e:
-            messagebox.showerror(APP_NAME, f"Couldn't open the Trades window: {e}")
-
     def _quit(self) -> None:
+        self.trades_page.close()
         if self._is_running() and self.stop_event:
             self._user_stopped = True
             self.stop_event.set()
@@ -1307,20 +1430,11 @@ class App(tk.Tk):
         self.destroy()
 
 
-def run_trades_window() -> None:
-    setup_logging(log_dir())
-    try:
-        trades_viewer.run()
-    except Exception as e:  # e.g. the WebView2 runtime is missing
-        log.exception("Trades window failed")
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror("Roblox trades", f"Couldn't open the Trades window:\n\n{e}\n\n"
-                             "It needs Microsoft Edge WebView2, which comes with Windows 10 and 11.")
+def _arg(name: str) -> str | None:
+    args = sys.argv[1:]
+    return args[args.index(name) + 1] if name in args[:-1] else None
 
 
 if __name__ == "__main__":
-    if "--trades" in sys.argv[1:]:
-        run_trades_window()
-    else:
-        App(start_minimized="--minimized" in sys.argv[1:]).mainloop()
+    # --tab poster|trades|history|settings|help opens straight to that tab.
+    App(start_minimized="--minimized" in sys.argv[1:], start_tab=_arg("--tab")).mainloop()

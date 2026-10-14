@@ -15,7 +15,7 @@ import logging
 import shutil
 from urllib.parse import urlsplit
 
-from .paths import app_dir
+from .paths import app_dir, resource_path
 
 TRADES_URL = "https://www.roblox.com/trades"
 # Only URLs containing "trade" are checked (keeps every other page request out of Python).
@@ -32,7 +32,8 @@ VIEW_ONLY_JS = r"""
 (() => {
   if (window.__roliViewOnly) return;
   window.__roliViewOnly = true;
-  const ACTIONS = /^(accept|decline|counter|make offer|send|send trade|cancel|confirm|ok, accept|ok, decline)$/i;
+  // Roblox's own buttons, plus RoValra's "Decline losing trades" bulk action.
+  const ACTIONS = /^(accept|decline|counter|make offer|send|send trade|cancel|confirm|ok, accept|ok, decline|decline losing trades)$/i;
   const hide = () => {
     document.querySelectorAll('button, a.btn, a[role="button"], input[type="button"], input[type="submit"]')
       .forEach(el => {
@@ -85,3 +86,18 @@ def forget_login() -> bool:
 def view_only_guard(method: str, url: str) -> str | None:
     """Request guard for the embedded browser: a reason to block, or None to allow."""
     return BLOCK_REASON if is_blocked(method, url) else None
+
+
+def rovalra_dir():
+    """The bundled RoValra extension, copied to a fixed folder next to the app (its settings are tied to
+    that path), or None if this build doesn't include it. See tools/fetch_rovalra.py."""
+    source = resource_path("vendor/rovalra")
+    if not (source / "manifest.json").exists():
+        return None
+    target = app_dir() / "extensions" / "rovalra"
+    marker = "BUNDLE_VERSION"
+    current = (target / marker).read_text(encoding="utf-8") if (target / marker).exists() else ""
+    if current != (source / marker).read_text(encoding="utf-8"):
+        shutil.rmtree(target, ignore_errors=True)
+        shutil.copytree(source, target)
+    return target

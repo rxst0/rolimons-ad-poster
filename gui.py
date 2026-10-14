@@ -71,6 +71,9 @@ ROBLOX TRADES (VIEW ONLY)
   ("Open on roblox.com" opens it in your normal browser).
 - This app never reads or stores your Roblox login; the sign-in stays in the
   tab's own browser profile. Settings > Sign out of Roblox removes it.
+- RoValra (a free open-source Roblox extension) is built into the tab to show
+  item values and projected items. Its trade-changing features are blocked.
+  Turn it off in Settings > "Show RoValra on trade pages".
 
 RUNNING IN THE BACKGROUND
 - While posting, closing the window keeps the app running in the system
@@ -571,6 +574,10 @@ class SettingsPage(Page):
         section(right, "Roblox trades")
         note(right, "The Received trades tab is view-only. Your Roblox sign-in stays inside that tab's "
                     "browser; this app never reads it.")
+        self.var_rovalra = check(right, "Show RoValra on trade pages (values, projected items)", a.rovalra)
+        note(right, "RoValra is a separate open-source extension by Valra (GPL-3.0), bundled with its "
+                    "trade-changing requests blocked so the tab stays view-only. Like any Roblox "
+                    "extension, it runs while you're signed in to Roblox in that tab.")
         ttk.Button(right, text="Sign out of Roblox", command=self._forget_roblox).grid(
             row=rows[right], column=0, columnspan=2, sticky="w", pady=(10, 0))
         rows[right] += 1
@@ -615,6 +622,7 @@ class SettingsPage(Page):
         c.app.auto_start_posting = self.var_auto.get()
         c.app.notifications = self.var_notify.get()
         c.app.check_updates = self.var_updates.get()
+        c.app.rovalra = self.var_rovalra.get()
         hour_errors = [e for e in validate_config(c) if "posting_hours" in e]
         if hour_errors:
             messagebox.showwarning("Settings", "\n".join(hour_errors), parent=self)
@@ -625,8 +633,11 @@ class SettingsPage(Page):
         except OSError as e:
             messagebox.showwarning("Settings", f"Couldn't change \"Start with Windows\": {e}", parent=self)
             return
+        rovalra_changed = c.app.rovalra != self.app.cfg.app.rovalra
         self.app.cfg = c
         self.app.persist()
+        if rovalra_changed:
+            self.app.trades_page.restart()
         self.saved.config(text="✓  Settings saved", foreground=C["ok"])
         self.after(3000, lambda: self.saved.winfo_exists() and self.saved.config(text=""))
 
@@ -719,11 +730,28 @@ class TradesPage(Page):
             self.host.winfo_id(), trades_viewer.TRADES_URL, trades_viewer.session_dir(),
             background=theme.BG, document_script=trades_viewer.VIEW_ONLY_JS,
             guard_filter=trades_viewer.GUARD_FILTER, request_guard=trades_viewer.view_only_guard,
-            on_error=lambda message: self.app.events.put(("trades_error", message)))
+            on_error=lambda message: self.app.events.put(("trades_error", message)),
+            extensions=self._extensions(), on_extension=lambda message: log.info("%s", message))
         try:
             self.view.start(self.host.winfo_width(), self.host.winfo_height())
         except Exception as e:
             self.show_error(f"The built-in browser couldn't start: {e}")
+
+    def _extensions(self) -> tuple:
+        if not self.app.cfg.app.rovalra:
+            return ()
+        try:
+            folder = trades_viewer.rovalra_dir()
+        except OSError as e:
+            log.warning("Couldn't prepare RoValra: %s", e)
+            return ()
+        return (folder,) if folder else ()
+
+    def restart(self) -> None:
+        """Re-opens the browser (e.g. after RoValra is turned on or off)."""
+        if self.view is not None:
+            self.close()
+            self.after(800, self.refresh)
 
     def show_error(self, message: str) -> None:
         self.view = None

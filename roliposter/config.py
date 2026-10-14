@@ -47,6 +47,7 @@ class AppSettings:
     auto_start_posting: bool = False  # start posting as soon as the app opens
     notifications: bool = True
     check_updates: bool = True
+    rovalra: bool = True              # load the bundled RoValra extension in the Received trades tab
 
 
 @dataclass
@@ -115,6 +116,7 @@ def config_from_dict(data: dict) -> Config:
                 auto_start_posting=bool(app.get("auto_start_posting", False)),
                 notifications=bool(app.get("notifications", True)),
                 check_updates=bool(app.get("check_updates", True)),
+                rovalra=bool(app.get("rovalra", True)),
             ),
             ads=ads,
         )

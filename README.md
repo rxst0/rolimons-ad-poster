@@ -88,6 +88,12 @@ to Roblox inside it the first time, like in a browser.
   The sign-in is kept in the tab's own browser profile (`roblox-session` next to the app, encrypted by
   Windows like Edge's cookies). This app's code never reads, copies or sends it.
 - **Sign out:** Settings → *Sign out of Roblox*, or uninstall the app (which deletes that folder).
+- **RoValra built in.** The tab loads [RoValra](https://github.com/NotValra/RoValra), a free open-source Roblox
+  extension by Valra, which adds item values and projected-item warnings to trade pages. The bundled copy is a
+  pinned, checksum-verified release with two changes: its branding images are replaced (its license excludes
+  them), and a small shim blocks its trade-changing requests (it has a "Decline losing trades" feature) so the
+  tab stays view-only. Like any Roblox extension, it runs while you're signed in to Roblox in that tab. Turn it
+  off in Settings → *Show RoValra on trade pages*.
 
 ## Settings
 
@@ -188,4 +194,6 @@ Rolimons has no official API for posting ads, so this may break if they change i
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Bundled third-party software keeps its own license: Inter font (SIL OFL 1.1,
+`assets/fonts/Inter-LICENSE.txt`) and RoValra (GPL-3.0; built by `tools/fetch_rovalra.py`, with its license,
+source link and a list of changes in `NOTICE.txt` inside the bundled extension folder).

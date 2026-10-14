@@ -15,3 +15,5 @@ android/.buildozer/
 android/bin/
 !android/buildozer.spec
 roblox-session/
+vendor/
+extensions/

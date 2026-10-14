@@ -5,8 +5,10 @@ setlocal
 cd /d "%~dp0"
 if not exist .venv\Scripts\python.exe python -m venv .venv || goto :fail
 .venv\Scripts\python -m pip install -q -r requirements.txt pyinstaller || goto :fail
+REM RoValra for the Received trades tab: pinned, checksum-verified, view-only patched (see the script).
+.venv\Scripts\python tools\fetch_rovalra.py || goto :fail
 .venv\Scripts\python -m PyInstaller --noconfirm --clean --onefile --windowed ^
-    --icon assets\icon.ico --add-data "assets\icon.ico;assets" --add-data "assets\icon.png;assets" --add-data "assets\fonts;assets\fonts" --hidden-import pystray._win32 --collect-all webview --hidden-import clr --name RoliAdPoster gui.py || goto :fail
+    --icon assets\icon.ico --add-data "assets\icon.ico;assets" --add-data "assets\icon.png;assets" --add-data "assets\fonts;assets\fonts" --add-data "vendor\rovalra;vendor\rovalra" --hidden-import pystray._win32 --collect-all webview --hidden-import clr --name RoliAdPoster gui.py || goto :fail
 .venv\Scripts\python -m PyInstaller --noconfirm --clean --onefile --console ^
     --icon assets\icon.ico --name RoliAdPosterCLI main.py || goto :fail
 

@@ -49,6 +49,8 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Type: filesandordirs; Name: "{app}\cache"
 ; The view-only Roblox trades window's browser profile (its Roblox sign-in).
 Type: filesandordirs; Name: "{app}\roblox-session"
+; The bundled RoValra extension, copied next to the app.
+Type: filesandordirs; Name: "{app}\extensions"
 ; Files the app creates at runtime (including the saved cookie).
 Type: files; Name: "{app}\.env"
 Type: files; Name: "{app}\config.json"

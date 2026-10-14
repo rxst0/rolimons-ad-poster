@@ -29,7 +29,8 @@ class EmbeddedWebView:
     def __init__(self, parent_hwnd: int, url: str, profile_dir: Path, *, background: str = "#15181d",
                  document_script: str = "", guard_filter: str = "*",
                  request_guard: Callable[[str, str], str | None] | None = None,
-                 on_error: Callable[[str], None] | None = None):
+                 on_error: Callable[[str], None] | None = None, extensions: tuple[Path, ...] = (),
+                 on_extension: Callable[[str], None] | None = None):
         self.parent_hwnd = parent_hwnd
         self.url = url
         self.profile_dir = profile_dir
@@ -38,6 +39,8 @@ class EmbeddedWebView:
         self.guard_filter = guard_filter
         self.request_guard = request_guard
         self.on_error = on_error or (lambda message: log.error("%s", message))
+        self.extensions = tuple(extensions)  # unpacked browser extension folders to install
+        self.on_extension = on_extension or (lambda message: log.info("%s", message))
         self.hwnd = 0
         self._form = None
         self._view = None
@@ -100,8 +103,9 @@ class EmbeddedWebView:
     def _run(self) -> None:
         try:
             import System.Windows.Forms as WinForms
-            from Microsoft.Web.WebView2.WinForms import CoreWebView2CreationProperties, WebView2
-            from System import Uri
+            from Microsoft.Web.WebView2.Core import CoreWebView2Environment, CoreWebView2EnvironmentOptions
+            from Microsoft.Web.WebView2.WinForms import WebView2
+            from System import Action, EventHandler
             from System.Drawing import Color
 
             color = Color.FromArgb(*(int(self.background[i:i + 2], 16) for i in (1, 3, 5)))
@@ -110,10 +114,7 @@ class EmbeddedWebView:
             form.ShowInTaskbar = False
             form.BackColor = color
             view = WebView2()
-            props = CoreWebView2CreationProperties()
             self.profile_dir.mkdir(parents=True, exist_ok=True)
-            props.UserDataFolder = str(self.profile_dir)
-            view.CreationProperties = props
             view.DefaultBackgroundColor = color
             view.Dock = WinForms.DockStyle.Fill
             view.CoreWebView2InitializationCompleted += self._on_initialized
@@ -126,7 +127,19 @@ class EmbeddedWebView:
             _user32.SetWindowLongW(self.hwnd, GWL_STYLE, (style | WS_CHILD | WS_CLIPCHILDREN) & ~0x80000000)
             _user32.SetParent(self.hwnd, self.parent_hwnd)
             _user32.MoveWindow(self.hwnd, 0, 0, self._size[0], self._size[1], True)
-            view.Source = Uri(self.url)  # starts WebView2 with the creation properties above
+            def create_environment(_sender, _args):
+                # Our own environment (not CreationProperties), so browser extensions can be enabled.
+                options = CoreWebView2EnvironmentOptions()
+                options.AreBrowserExtensionsEnabled = bool(self.extensions)
+                awaiter = CoreWebView2Environment.CreateAsync(None, str(self.profile_dir), options).GetAwaiter()
+
+                def created():
+                    try:
+                        view.EnsureCoreWebView2Async(awaiter.GetResult())
+                    except Exception as e:
+                        self.on_error(f"The built-in browser couldn't start: {e}")
+                awaiter.OnCompleted(Action(created))
+            form.Shown += EventHandler(create_environment)
             WinForms.Application.Run(form)
         except Exception as e:
             log.exception("WebView2 failed to start")
@@ -138,19 +151,41 @@ class EmbeddedWebView:
         if not args.IsSuccess:
             self.on_error(f"The built-in browser couldn't start: {args.InitializationException}")
             return
-        from Microsoft.Web.WebView2.Core import CoreWebView2WebResourceContext
+        from Microsoft.Web.WebView2.Core import (CoreWebView2WebResourceContext,
+                                                 CoreWebView2WebResourceRequestSourceKinds)
         core = self._view.CoreWebView2
         settings = core.Settings
         settings.AreDevToolsEnabled = False
         settings.IsStatusBarEnabled = False
         settings.AreDefaultContextMenusEnabled = True
         if self.request_guard is not None:
-            core.AddWebResourceRequestedFilter(self.guard_filter, CoreWebView2WebResourceContext.All)
+            # Every request source WebView2 can report: pages, shared workers and service workers.
+            core.AddWebResourceRequestedFilter(self.guard_filter, CoreWebView2WebResourceContext.All,
+                                               CoreWebView2WebResourceRequestSourceKinds.All)
             core.WebResourceRequested += self._on_request
         if self.document_script:
             core.AddScriptToExecuteOnDocumentCreatedAsync(self.document_script)
         core.NewWindowRequested += self._on_new_window
         self._ready.set()
+        self._install_extensions(core, list(self.extensions))
+
+    def _install_extensions(self, core, remaining: list) -> None:
+        """Installs extensions one at a time, then opens the page (so their scripts apply to it)."""
+        if not remaining:
+            core.Navigate(self.url)
+            return
+        from System import Action
+        folder = remaining.pop(0)
+        awaiter = core.Profile.AddBrowserExtensionAsync(str(folder)).GetAwaiter()
+
+        def done():
+            try:
+                ext = awaiter.GetResult()
+                self.on_extension(f"Extension loaded: {ext.Name} ({'on' if ext.IsEnabled else 'off'})")
+            except Exception as e:
+                self.on_extension(f"Couldn't load the extension in {folder.name}: {e}")
+            self._install_extensions(core, remaining)
+        awaiter.OnCompleted(Action(done))
 
     def _on_new_window(self, sender, args) -> None:
         # Keep pop-ups (e.g. "open trade in new tab") inside this view.

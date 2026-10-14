@@ -32,7 +32,9 @@ android.permissions = INTERNET, ACCESS_NETWORK_STATE, FOREGROUND_SERVICE, FOREGR
 
 android.api = 35
 android.minapi = 26
-android.archs = arm64-v8a, armeabi-v7a
+# 64-bit ARM only: python-for-android corrupts its pip when building two archs in one run
+# (kivy/python-for-android#3364). Every current phone is 64-bit.
+android.archs = arm64-v8a
 android.accept_sdk_license = True
 # The cookie must never be copied off the phone by Android's cloud backup.
 android.allow_backup = False

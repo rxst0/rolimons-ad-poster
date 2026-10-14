@@ -23,6 +23,7 @@ launch edit --es screen edit --es search dom
 launch settings --es screen settings
 launch history --es screen history
 launch login --es login 1
+launch trades --es screen trades
 
 adb shell am force-stop "$PKG"
 printf 'ROLI_VERIFICATION=aaaaaaaa.bbbbbbbb.cccccccc\n' | \

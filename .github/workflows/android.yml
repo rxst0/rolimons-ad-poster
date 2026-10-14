@@ -46,6 +46,11 @@ jobs:
   emulator:
     needs: build
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 35 = Android 15, where apps are drawn edge-to-edge under the system bars.
+        api: [34, 35]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v5
@@ -59,7 +64,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       - uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: ${{ matrix.api }}
           arch: x86_64
           target: google_apis
           disable-animations: true
@@ -67,5 +72,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: emulator-results
+          name: emulator-results-${{ matrix.api }}
           path: shots/

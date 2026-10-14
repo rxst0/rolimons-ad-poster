@@ -16,6 +16,7 @@ from kivy.input.motionevent import MotionEvent
 from kivy.core.window import Window
 from kivy.logger import Logger
 from kivy.uix.modalview import ModalView
+from kivy.uix.scrollview import ScrollView
 
 import droid
 import runner
@@ -256,6 +257,12 @@ class SelfTest:
         cards = app.sm.get_screen("home").ids.ads_box.children
         if cards:
             card = cards[-1]
+            scroll = card.parent
+            while scroll is not None and not isinstance(scroll, ScrollView):
+                scroll = scroll.parent
+            if scroll is not None:  # small screens: bring the card into view before swiping on it
+                scroll.scroll_to(card, padding=20, animate=False)
+                yield 0.5
             cx, cy = card.to_window(card.center_x, card.center_y)
             self.swipe(-1, start=(cx, cy))
             yield 1

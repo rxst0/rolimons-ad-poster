@@ -135,6 +135,15 @@ def request_ignore_battery_optimizations() -> None:
     ctx.startActivity(intent)
 
 
+def move_to_background() -> None:
+    """What the back button does on the main screen: hide the app instead of closing it."""
+    if IS_ANDROID:
+        from jnius import autoclass  # type: ignore
+        autoclass("org.kivy.android.PythonActivity").mActivity.moveTaskToBack(True)
+    else:
+        log.debug("Back pressed on the home screen (ignored in the desktop preview).")
+
+
 def open_url(url: str) -> None:
     if IS_ANDROID:
         from jnius import autoclass  # type: ignore
@@ -147,10 +156,26 @@ def open_url(url: str) -> None:
         webbrowser.open(url)
 
 
+def is_debug_build() -> bool:
+    if not IS_ANDROID:
+        return True
+    try:
+        from jnius import autoclass  # type: ignore
+        ApplicationInfo = autoclass("android.content.pm.ApplicationInfo")
+        return bool(_context().getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE)
+    except Exception:
+        return False
+
+
 def launch_extra(name: str) -> str | None:
-    """A string extra from the launching intent (used by automated screenshot tests)."""
+    """A string extra from the launching intent, used by automated tests.
+
+    Only honoured in debug builds: in the released app any other app could send these extras.
+    """
     if not IS_ANDROID:
         return os.environ.get(f"ROLIPOSTER_{name.upper()}")
+    if not is_debug_build():
+        return None
     try:
         from jnius import autoclass  # type: ignore
         intent = autoclass("org.kivy.android.PythonActivity").mActivity.getIntent()

@@ -1,15 +1,18 @@
 name: Release
 
-# Push a tag like v1.3.0 (matching roliposter/__init__.py) to build and publish a release.
+# Push a tag like v1.4.1 (matching roliposter/__init__.py) to build and publish a release.
+# Nothing is published unless the Windows build, the signed APK build and the APK's emulator check
+# all succeed, so a release always has every download.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:  # dry run: builds and checks everything, publishes nothing
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -18,6 +21,7 @@ jobs:
           python-version: "3.12"
 
       - name: Check tag matches app version
+        if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: |
           $version = python -c "import roliposter; print(roliposter.__version__)"
@@ -37,18 +41,15 @@ jobs:
         shell: cmd
         run: build_exe.bat
 
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          name: Rolimons Ad Poster ${{ github.ref_name }}
-          generate_release_notes: true
-          files: |
+          name: windows
+          path: |
             dist/RolimonsAdPosterSetup.exe
             dist/RoliAdPoster.exe
             dist/RoliAdPosterCLI.exe
 
   android:
-    needs: release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -84,8 +85,57 @@ jobs:
           P4A_RELEASE_KEYALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           yes | buildozer android release
-          cp bin/*-release.apk "$RUNNER_TEMP/RolimonsAdPoster.apk"
-      - name: Attach APK to the release
+          mkdir -p ../apk
+          cp bin/*-release.apk ../apk/RolimonsAdPoster.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: apk/RolimonsAdPoster.apk
+
+  android-verify:
+    # Installs the exact APK being released on an emulator and checks it starts and stays up.
+    needs: android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: apk
+          path: apk
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: bash .github/android-release-check.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-apk-check
+          path: shots/
+
+  publish:
+    needs: [windows, android-verify]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ runner.temp }}/RolimonsAdPoster.apk
+          name: Rolimons Ad Poster ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            out/RolimonsAdPosterSetup.exe
+            out/RolimonsAdPoster.apk
+            out/RoliAdPoster.exe
+            out/RoliAdPosterCLI.exe

@@ -403,7 +403,7 @@ class RoliApp(App):
         self.catalog: ItemCatalog | None = None
         self.inventory = None
         self.thumbs = ThumbnailCache(cache_dir() / "thumbs")
-        self._thumb_pending: set[int] = set()
+        self._thumb_tried: set[int] = set()
         self.engine = droid.Engine(HOME)
         self.login = None
         self._start_requested_at = 0.0
@@ -459,11 +459,12 @@ class RoliApp(App):
         return True
 
     def _on_key(self, _window, key, *_):
-        if key == 27:  # Android back button
+        if key == 27:  # Android back button (Escape on a PC)
             if self.login and self.login.is_open:
                 self.login.close()
-                return True
-            return self.go_back()
+            elif not self.go_back():
+                droid.move_to_background()  # like Home: never quit, posting keeps running
+            return True
         return False
 
     def notice(self, title: str, message: str, buttons=(("OK", None),)):
@@ -611,6 +612,10 @@ class RoliApp(App):
             self.toggle_run()
         if droid.launch_extra("login") == "1":
             self.sign_in()
+        if droid.launch_extra("selftest") == "1":
+            from selftest import SelfTest
+            self._selftest = SelfTest(self, HOME)  # keep a reference: Kivy's Clock only holds weak ones
+            self._selftest.start()
 
     # ---- ads ---------------------------------------------------------------
     def _short(self, item_id: int) -> str:
@@ -659,10 +664,11 @@ class RoliApp(App):
                        value=f"Value {item.default_value:,}" if item else "")
 
     def request_thumbs(self, item_ids: list[int]):
-        wanted = [i for i in item_ids if not self.thumbs.cached(i) and i not in self._thumb_pending]
+        # Each picture is tried once per session, so a failed download can't trigger endless refetches.
+        wanted = [i for i in item_ids if not self.thumbs.cached(i) and i not in self._thumb_tried]
         if not wanted:
             return
-        self._thumb_pending.update(wanted)
+        self._thumb_tried.update(wanted)
 
         def work():
             try:
@@ -674,7 +680,6 @@ class RoliApp(App):
 
     @mainthread
     def _thumbs_ready(self, ids):
-        self._thumb_pending.difference_update(ids)
         if self.sm.current == "edit":
             edit = self.sm.get_screen("edit")
             edit.refresh()

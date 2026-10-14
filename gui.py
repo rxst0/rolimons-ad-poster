@@ -668,7 +668,7 @@ class App(tk.Tk):
         self.thumb_listeners: list = []
         self._thumb_images: dict[int, tk.PhotoImage] = {}
         self.blank_thumb = tk.PhotoImage(master=self, width=THUMB_PX, height=THUMB_PX)  # keeps rows aligned
-        self._thumb_pending: set[int] = set()
+        self._thumb_tried: set[int] = set()
         self._notified: set[str] = set()
         self._user_stopped = False
         self._hidden_hint_shown = False
@@ -928,10 +928,11 @@ class App(tk.Tk):
         return image
 
     def request_thumbs(self, item_ids: list[int]) -> None:
-        wanted = [i for i in item_ids if not self.thumbs.cached(i) and i not in self._thumb_pending]
+        # Each picture is tried once per session, so a failed download can't trigger endless refetches.
+        wanted = [i for i in item_ids if not self.thumbs.cached(i) and i not in self._thumb_tried]
         if not wanted:
             return
-        self._thumb_pending.update(wanted)
+        self._thumb_tried.update(wanted)
 
         def work():
             try:
@@ -1228,7 +1229,6 @@ class App(tk.Tk):
                     for listener in list(self.thumb_listeners):
                         listener()
             elif kind == "thumbs":
-                self._thumb_pending.difference_update(payload)
                 for listener in list(self.thumb_listeners):
                     listener()
             elif kind == "update":

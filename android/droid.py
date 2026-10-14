@@ -185,6 +185,128 @@ def launch_extra(name: str) -> str | None:
         return None
 
 
+# ---- Received trades tab (WebView) ---------------------------------------------------
+class TradesView:
+    """Roblox's trades page in a native WebView laid over the Received trades tab.
+
+    View-only: org.roliposter.ViewOnlyWebViewClient (android/java) answers every trade-changing request
+    with a local 403, so it never leaves the phone. The app never reads the Roblox login; it stays in
+    the WebView's own cookie store.
+    """
+
+    available = IS_ANDROID
+
+    def __init__(self, url: str, page_script: str):
+        self.url = url
+        self.page_script = page_script
+        self._web = None
+        self._callbacks = []  # keep Java callback proxies alive until they fire
+
+    def show(self, top_px: int, height_px: int) -> None:
+        from android.runnable import run_on_ui_thread  # type: ignore
+        run_on_ui_thread(self._show_ui)(int(top_px), int(height_px))
+
+    def _show_ui(self, top_px: int, height_px: int) -> None:
+        from jnius import autoclass  # type: ignore
+        FrameParams = autoclass("android.widget.FrameLayout$LayoutParams")
+        Gravity = autoclass("android.view.Gravity")
+        View = autoclass("android.view.View")
+        params = FrameParams(FrameParams.MATCH_PARENT, max(height_px, 1), Gravity.TOP)
+        params.topMargin = top_px
+        if self._web is None:
+            activity = autoclass("org.kivy.android.PythonActivity").mActivity
+            WebView = autoclass("android.webkit.WebView")
+            CookieManager = autoclass("android.webkit.CookieManager")
+            Client = autoclass("org.roliposter.ViewOnlyWebViewClient")
+            Color = autoclass("android.graphics.Color")
+            from roliposter.palette import BG
+            web = WebView(activity)
+            settings = web.getSettings()
+            settings.setJavaScriptEnabled(True)
+            settings.setDomStorageEnabled(True)
+            web.setBackgroundColor(Color.parseColor(BG))
+            web.setWebViewClient(Client(self.page_script))
+            cookies = CookieManager.getInstance()
+            cookies.setAcceptCookie(True)
+            cookies.setAcceptThirdPartyCookies(web, True)
+            activity.addContentView(web, params)
+            web.loadUrl(self.url)
+            self._web = web
+        else:
+            self._web.setLayoutParams(params)
+            self._web.setVisibility(View.VISIBLE)
+
+    def hide(self) -> None:
+        if self._web is None:
+            return
+        from android.runnable import run_on_ui_thread  # type: ignore
+
+        def hide_ui():
+            from jnius import autoclass  # type: ignore
+            self._web.setVisibility(autoclass("android.view.View").GONE)
+        run_on_ui_thread(hide_ui)()
+
+    def _on_ui(self, func) -> None:
+        if self._web is not None:
+            from android.runnable import run_on_ui_thread  # type: ignore
+            run_on_ui_thread(func)()
+
+    def reload(self) -> None:
+        self._on_ui(lambda: self._web.reload())
+
+    def go_home(self) -> None:
+        self._on_ui(lambda: self._web.loadUrl(self.url))
+
+    def go_back(self, otherwise) -> None:
+        """Android back button: go back a page inside the tab, or call otherwise() on Kivy's thread."""
+        if self._web is None:
+            otherwise()
+            return
+        from kivy.clock import Clock
+
+        def back():  # WebView methods must run on the UI thread
+            if self._web.canGoBack():
+                self._web.goBack()
+            else:
+                Clock.schedule_once(lambda *_: otherwise(), 0)
+        self._on_ui(back)
+
+    def eval_js(self, code: str, callback) -> None:
+        """Runs JavaScript in the page; callback(json_text) gets the result (used by the self-test)."""
+        from jnius import PythonJavaClass, java_method  # type: ignore
+
+        class Result(PythonJavaClass):
+            __javainterfaces__ = ["android/webkit/ValueCallback"]
+            __javacontext__ = "app"
+
+            @java_method("(Ljava/lang/Object;)V")
+            def onReceiveValue(self, value):
+                callback(str(value) if value is not None else "null")
+
+        proxy = Result()
+        self._callbacks = self._callbacks[-20:] + [proxy]
+        self._on_ui(lambda: self._web.evaluateJavascript(code, proxy))
+
+    @staticmethod
+    def blocked_count() -> int:
+        from jnius import autoclass  # type: ignore
+        return int(autoclass("org.roliposter.ViewOnlyWebViewClient").blockedCount)
+
+
+def sign_out_web() -> None:
+    """Clears every website sign-in in the app's WebViews (signs out of Roblox in the trades tab)."""
+    if not IS_ANDROID:
+        return
+    from jnius import autoclass  # type: ignore
+    from android.runnable import run_on_ui_thread  # type: ignore
+
+    def clear():
+        manager = autoclass("android.webkit.CookieManager").getInstance()
+        manager.removeAllCookies(None)
+        manager.flush()
+    run_on_ui_thread(clear)()
+
+
 # ---- Rolimons sign-in (WebView) -----------------------------------------------------
 class RolimonsLogin:
     """Opens rolimons.com in an in-app browser and watches for the _RoliVerification cookie.

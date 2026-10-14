@@ -64,5 +64,5 @@ except Exception as e:
 for r in data["results"]:
     print(("PASS " if r["ok"] else "FAIL ") + r["step"], r["detail"][:200] if not r["ok"] else "")
 print(f"{data['passed']}/{data['total']} passed")
-sys.exit(0 if data["total"] >= 13 and data["passed"] == data["total"] else 1)
+sys.exit(0 if data["total"] >= 18 and data["passed"] == data["total"] else 1)
 PY

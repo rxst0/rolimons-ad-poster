@@ -15,6 +15,7 @@ from kivy.core.window import Window
 from kivy.logger import Logger
 from kivy.uix.modalview import ModalView
 
+import droid
 import runner
 from roliposter.config import load_config
 from roliposter.paths import config_path
@@ -78,6 +79,44 @@ class SelfTest:
         (self.home / "selftest.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
         Logger.info(f"SELFTEST: DONE | {passed}/{len(self.results)} passed")
 
+    def trades_steps(self):
+        """Android only: the Received trades tab loads Roblox and blocks trade-changing requests."""
+        app = self.app
+        view = app.trades_view
+        box = {}
+
+        def ask(code):
+            box.pop("v", None)
+            view.eval_js(code, lambda value: box.__setitem__("v", value))
+
+        app.switch_tab("trades")
+        yield 2
+        self.record("trades tab opens", app.sm.current == "trades")
+        loaded = False
+        for _ in range(60):
+            ask("location.href")
+            yield 1
+            if "roblox.com" in box.get("v", ""):
+                loaded = True
+                break
+        self.record("trades tab loads Roblox", loaded, box.get("v", ""))
+        ask("(async () => { try { const r = await fetch('https://trades.roblox.com/v1/trades/1/decline', "
+            "{method: 'POST', credentials: 'include'}); window.__roliTest = r.status + ' ' + r.statusText; } "
+            "catch (e) { window.__roliTest = 'error ' + e; } })(); 'started'")
+        result = ""
+        for _ in range(30):
+            yield 1
+            ask("window.__roliTest || ''")
+            yield 0.5
+            value = box.get("v", "")
+            if "403" in value or "error" in value:
+                result = value
+                break
+        self.record("trades tab blocks trade-changing requests",
+                    "Blocked" in result and droid.TradesView.blocked_count() > 0, result)
+        app.switch_tab("home")
+        yield 1
+
     # ---- the test --------------------------------------------------------------
     def steps(self):
         app = self.app
@@ -128,23 +167,30 @@ class SelfTest:
         app.set_enabled(index, True)
         yield 1
 
-        # Change a setting.
-        app.show("settings")
+        # Change a setting (Settings tab).
+        app.switch_tab("settings")
         yield 1
         settings = app.sm.get_screen("settings")
         settings.set_order("random")
         self.shot("4-settings")
         settings.save()
-        yield 1
+        yield 2
         self.dismiss_popups()
-        self.record("setting saved", load_config(config_path()).rotation == "random" and app.sm.current == "home")
+        self.record("setting saved", load_config(config_path()).rotation == "random")
 
-        # History screen.
-        app.show("history")
+        # History and Help tabs, then Back returns to the Ads tab.
+        app.switch_tab("history")
         yield 1
-        self.record("history opens", app.sm.current == "history")
+        self.record("history tab opens", app.sm.current == "history" and app.active_tab == "history")
+        app.switch_tab("help")
+        yield 1
+        self.record("help tab opens", app.sm.current == "help")
         app.go_back()
         yield 1
+        self.record("back from a tab returns to Ads", app.sm.current == "home")
+
+        if droid.TradesView.available:
+            yield from self.trades_steps()
 
         # Set a cookie (fake but well-formed) and start posting.
         app.save_cookie(_fake_cookie(1))

@@ -20,6 +20,7 @@ import requests  # noqa: E402
 from kivy.app import App  # noqa: E402
 from kivy.clock import Clock, mainthread  # noqa: E402
 from kivy.core.window import Window  # noqa: E402
+from kivy.factory import Factory  # noqa: E402
 from kivy.lang import Builder  # noqa: E402
 from kivy.properties import BooleanProperty, ColorProperty, NumericProperty, StringProperty  # noqa: E402
 from kivy.uix.behaviors import ButtonBehavior  # noqa: E402
@@ -45,9 +46,30 @@ from roliposter.poster import fmt_duration  # noqa: E402
 from roliposter.state import PostHistory  # noqa: E402
 from roliposter.thumbs import ThumbnailCache  # noqa: E402
 from roliposter.updates import check_for_update  # noqa: E402
+from roliposter.trades_viewer import TRADES_URL, VIEW_ONLY_JS  # noqa: E402
 from roliposter.values import evaluate_ad  # noqa: E402
 
 COOKIE_WARN_DAYS = 3
+HELP_TEXT = """[b]Getting started[/b]
+
+[b]1. Sign in to Rolimons[/b]
+Tap "Sign in to Rolimons" on the Ads tab, then log in and verify like on the website. The app picks up your Rolimons cookie by itself. (On a PC you can also copy the _RoliVerification cookie and use "Paste cookie".)
+
+[b]2. Make ads[/b]
+Tap "+ New ad", search items by name, tap Offer or Want, pick tags, and save. Ads offering items you no longer own are skipped automatically.
+
+[b]3. Start posting[/b]
+Tap "Start posting". One ad goes out about every 15 minutes (Rolimons' cooldown) with a small random delay. A notification stays while it posts, even with the screen off. In Settings, tap "Allow running in the background" so Android doesn't pause it.
+
+[b]Received trades[/b]
+The Trades tab shows Roblox's own trades page. Sign in to Roblox there the first time. It is view-only: accepting, declining, countering and sending are blocked inside the app. Respond on roblox.com or in the Roblox app. Settings > "Sign out of Roblox" signs you out.
+
+[b]Safety[/b]
+This app never asks for your Roblox password or .ROBLOSECURITY cookie, and never reads your Roblox sign-in. Anyone who asks you to paste those is trying to steal your account.
+
+Run posting on one device at a time: two devices posting for the same account hit each other's cooldown.
+"""
+TABS = ("home", "trades", "history", "settings", "help")
 RESULT_COLORS = {"SUCCESS": P.OK, "AUTH_ERROR": P.BAD, "REJECTED": P.BAD}
 
 
@@ -142,6 +164,36 @@ class HomeScreen(Screen):
     pass
 
 
+class NavButton(ButtonBehavior, Label):
+    tab = StringProperty("")
+
+
+class TradesScreen(Screen):
+    placeholder = StringProperty("Loading Roblox..." if droid.TradesView.available else
+                                 "The Received trades tab works in the Android app.\n\n"
+                                 "It shows Roblox's own trades page, view-only.")
+
+    def on_enter(self):
+        App.get_running_app().show_trades_view()
+
+    def on_pre_leave(self):
+        App.get_running_app().hide_trades_view()
+
+    def reload(self):
+        view = App.get_running_app().trades_view
+        if view:
+            view.reload()
+
+    def inbound(self):
+        view = App.get_running_app().trades_view
+        if view:
+            view.go_home()
+
+
+class HelpScreen(Screen):
+    text = StringProperty(HELP_TEXT)
+
+
 class CookieScreen(Screen):
     def on_pre_enter(self):
         self.ids.cookie.text = ""
@@ -200,6 +252,15 @@ class SettingsScreen(Screen):
                              "Android may pause posting to save battery. Allow the app to run in the "
                              "background so ads keep going with the screen off.")
 
+    def sign_out_roblox(self):
+        app = App.get_running_app()
+        if not droid.TradesView.available:
+            return app.notice("Roblox trades", "Signing in to Roblox happens in the Android app.")
+        droid.sign_out_web()
+        if app.trades_view:
+            app.trades_view.go_home()
+        app.notice("Signed out", "You're signed out of Roblox in this app.")
+
     def request_battery(self):
         droid.request_ignore_battery_optimizations()
         Clock.schedule_once(lambda *_: self.refresh_battery(), 3)
@@ -237,7 +298,7 @@ class SettingsScreen(Screen):
             return app.notice("Check your settings", "\n".join(problems))
         app.cfg = c
         app.persist()
-        app.go_back()
+        app.toast("Settings saved")
 
 
 class EditScreen(Screen):
@@ -388,6 +449,7 @@ class RoliApp(App):
     cookie_state = StringProperty("bad")
     ads_count = StringProperty("")
     update_text = StringProperty("")
+    active_tab = StringProperty("home")
     can_sign_in = BooleanProperty(droid.RolimonsLogin.available)
     icon_path = StringProperty(str(asset("assets/icon.png")))
 
@@ -414,7 +476,8 @@ class RoliApp(App):
         register_fonts()
         Builder.load_file(str(HERE / "ui.kv"))
         self.sm = ScreenManager(transition=SlideTransition(duration=0.18))
-        for screen in (HomeScreen(), EditScreen(), SettingsScreen(), HistoryScreen(), CookieScreen()):
+        for screen in (HomeScreen(), EditScreen(), SettingsScreen(), HistoryScreen(), CookieScreen(),
+                       TradesScreen(), HelpScreen()):
             self.sm.add_widget(screen)
         self.refresh_ads()
         self.update_cookie_status()
@@ -423,7 +486,14 @@ class RoliApp(App):
         if self.cfg.app.check_updates:
             threading.Thread(target=self._check_updates, daemon=True).start()
         Clock.schedule_once(lambda *_: self._first_run_checks(), 1.0)
-        return self.sm
+        self.trades_view = (droid.TradesView(TRADES_URL, VIEW_ONLY_JS) if droid.TradesView.available
+                            else None)
+        self.nav = Factory.NavBar()
+        root = BoxLayout(orientation="vertical")
+        root.add_widget(self.sm)
+        root.add_widget(self.nav)
+        self.sm.bind(current=lambda _sm, name: setattr(self, "active_tab", name) if name in TABS else None)
+        return root
 
     def _load_cfg(self) -> Config:
         try:
@@ -451,21 +521,51 @@ class RoliApp(App):
         self.sm.transition.direction = "left"
         self.sm.current = name
 
+    def switch_tab(self, name: str):
+        """Bottom tab bar: jump to a tab (tabs aren't stacked, so Back from a tab goes to Ads)."""
+        if name == self.sm.current:
+            return
+        self._stack.clear()
+        order = list(TABS)
+        current = self.sm.current if self.sm.current in order else "home"
+        self.sm.transition.direction = "left" if order.index(name) > order.index(current) else "right"
+        self.sm.current = name
+
     def go_back(self):
-        if not self._stack:
-            return False
-        self.sm.transition.direction = "right"
-        self.sm.current = self._stack.pop()
-        return True
+        if self._stack:
+            self.sm.transition.direction = "right"
+            self.sm.current = self._stack.pop()
+            return True
+        if self.sm.current in TABS and self.sm.current != "home":
+            self.switch_tab("home")
+            return True
+        return False
 
     def _on_key(self, _window, key, *_):
         if key == 27:  # Android back button (Escape on a PC)
             if self.login and self.login.is_open:
                 self.login.close()
+            elif self.sm.current == "trades" and self.trades_view:
+                self.trades_view.go_back(otherwise=lambda: self.switch_tab("home"))
             elif not self.go_back():
                 droid.move_to_background()  # like Home: never quit, posting keeps running
             return True
         return False
+
+    # ---- received trades -------------------------------------------------
+    def _trades_area(self) -> tuple[int, int]:
+        """Pixels between the trades tab's top bar and the bottom tab bar (Android view coordinates)."""
+        from kivy.metrics import dp
+        top = int(dp(58))
+        return top, int(Window.height - top - self.nav.height)
+
+    def show_trades_view(self):
+        if self.trades_view:
+            self.trades_view.show(*self._trades_area())
+
+    def hide_trades_view(self):
+        if self.trades_view:
+            self.trades_view.hide()
 
     def notice(self, title: str, message: str, buttons=(("OK", None),)):
         Notice(title, message, buttons).open()
@@ -604,7 +704,9 @@ class RoliApp(App):
         screen = droid.launch_extra("screen")
         if screen == "edit" and self.cfg.ads:
             self.edit_ad(0)
-        elif screen in ("settings", "history", "cookie"):
+        elif screen in ("settings", "history", "help", "trades"):
+            self.switch_tab(screen)
+        elif screen == "cookie":
             self.show(screen)
         if droid.launch_extra("search"):
             self.sm.get_screen("edit").ids.search.text = droid.launch_extra("search")

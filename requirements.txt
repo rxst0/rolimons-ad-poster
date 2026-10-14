@@ -1,3 +1,5 @@
 requests>=2.31
 pystray>=0.19
 Pillow>=10.0
+# Pinned: trades_viewer.py hooks pywebview's WebView2 request handler to enforce view-only.
+pywebview==6.2.1

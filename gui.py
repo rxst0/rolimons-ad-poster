@@ -3,16 +3,18 @@ import copy
 import logging
 import queue
 import re
+import subprocess
 import sys
 import threading
 import time
 import tkinter as tk
 import webbrowser
+from pathlib import Path
 from tkinter import messagebox, ttk
 
 import requests
 
-from roliposter import __version__, autostart
+from roliposter import __version__, autostart, trades_viewer
 from roliposter import theme
 from roliposter.config import (MAX_OFFER_ITEMS, MAX_REQUEST_SLOTS, VALID_TAGS, Ad, Config, ConfigError,
                                load_config, save_config, validate_config)
@@ -21,7 +23,7 @@ from roliposter.cookie import (COOKIE_ENV_VAR, clean_cookie, cookie_info, get_co
 from roliposter.inventory import Inventory, fetch_inventory, missing_offer_items
 from roliposter.items import ItemCatalog
 from roliposter.logsetup import REDACTOR, setup_logging
-from roliposter.paths import cache_dir, config_path, env_path, log_dir, resource_path, state_path
+from roliposter.paths import app_dir, cache_dir, config_path, env_path, log_dir, resource_path, state_path
 from roliposter.poster import AuthError, Poster, fmt_duration
 from roliposter.startup import StartupError, fetch_catalog_with_retry, prepare
 from roliposter.state import PostHistory
@@ -62,6 +64,14 @@ GETTING STARTED
    Click "Start posting". One ad is posted roughly every 15 minutes
    (Rolimons' cooldown) plus a small random delay, cycling through your ads.
    "Skip" jumps to the following ad. Click "Stop" any time.
+
+ROBLOX TRADES (VIEW ONLY)
+- Click "Trades" to see the trades people send you, on Roblox's own trades
+  page in a separate window. Sign in to Roblox inside that window.
+- It is view-only: accepting, declining, countering and sending are blocked
+  inside the window. Respond to trades on roblox.com or in the Roblox app.
+- This app never reads or stores your Roblox login; the sign-in stays in that
+  window's own browser profile. Settings > Sign out of Roblox removes it.
 
 RUNNING IN THE BACKGROUND
 - While posting, closing the window keeps the app running in the system
@@ -540,10 +550,28 @@ class SettingsDialog(Dialog):
         ttk.Label(right, style="Muted.TLabel", justify="left", wraplength=300, text=(
             "Tip: turn on \"Start with Windows\" and \"Start posting automatically\" to keep "
             "ads going without opening the app.")).grid(row=rows[right], column=0, columnspan=2, sticky="w", pady=(10, 0))
+        rows[right] += 1
+
+        section(right, "Roblox trades")
+        ttk.Label(right, style="Muted.TLabel", justify="left", wraplength=300, text=(
+            "The Trades window is view-only. Your Roblox sign-in stays inside that window; this app "
+            "never reads it.")).grid(row=rows[right], column=0, columnspan=2, sticky="w")
+        rows[right] += 1
+        ttk.Button(right, text="Sign out of Roblox", command=self._forget_roblox).grid(
+            row=rows[right], column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         ttk.Separator(self.body).pack(fill="x", pady=16)
         self.footer(self.body, "Save", self._save).pack(fill="x")
         self.show()
+
+    def _forget_roblox(self) -> None:
+        if self.app.trades_open():
+            messagebox.showinfo("Roblox trades", "Close the Trades window first.", parent=self)
+        elif trades_viewer.forget_login():
+            messagebox.showinfo("Roblox trades", "Signed out. The Trades window will ask you to sign in again.",
+                                parent=self)
+        else:
+            messagebox.showinfo("Roblox trades", "You're not signed in to Roblox in this app.", parent=self)
 
     def _save(self) -> None:
         try:
@@ -738,6 +766,7 @@ class App(tk.Tk):
         ttk.Button(head, text="Help", style="Ghost.TButton", command=lambda: HelpDialog(self)).pack(side="right")
         ttk.Button(head, text="Settings", style="Ghost.TButton", command=lambda: SettingsDialog(self)).pack(side="right", padx=(0, 4))
         ttk.Button(head, text="History", style="Ghost.TButton", command=lambda: HistoryDialog(self)).pack(side="right", padx=(0, 4))
+        ttk.Button(head, text="Trades", style="Ghost.TButton", command=self.open_trades).pack(side="right", padx=(0, 4))
 
         # Update banner (hidden until an update is found)
         self.banner = ttk.Frame(root, style="Banner.TFrame", padding=(18, 10))
@@ -1248,6 +1277,27 @@ class App(tk.Tk):
             return
         self._quit()
 
+    # ---- Roblox trades (view-only window) -----------------------------
+    def trades_open(self) -> bool:
+        proc = getattr(self, "_trades_proc", None)
+        return proc is not None and proc.poll() is None
+
+    def open_trades(self) -> None:
+        """Opens Roblox's own trades page in a separate, view-only window (see roliposter/trades_viewer.py)."""
+        if self.trades_open():
+            messagebox.showinfo(APP_NAME, "The Trades window is already open.")
+            return
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--trades"]
+        else:
+            pythonw = Path(sys.executable).with_name("pythonw.exe")
+            cmd = [str(pythonw if pythonw.exists() else sys.executable), str(Path(__file__).resolve()), "--trades"]
+        try:
+            self._trades_proc = subprocess.Popen(cmd, cwd=str(app_dir()))
+            log.info("Opened the Roblox trades window (view only).")
+        except OSError as e:
+            messagebox.showerror(APP_NAME, f"Couldn't open the Trades window: {e}")
+
     def _quit(self) -> None:
         if self._is_running() and self.stop_event:
             self._user_stopped = True
@@ -1257,5 +1307,20 @@ class App(tk.Tk):
         self.destroy()
 
 
+def run_trades_window() -> None:
+    setup_logging(log_dir())
+    try:
+        trades_viewer.run()
+    except Exception as e:  # e.g. the WebView2 runtime is missing
+        log.exception("Trades window failed")
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror("Roblox trades", f"Couldn't open the Trades window:\n\n{e}\n\n"
+                             "It needs Microsoft Edge WebView2, which comes with Windows 10 and 11.")
+
+
 if __name__ == "__main__":
-    App(start_minimized="--minimized" in sys.argv[1:]).mainloop()
+    if "--trades" in sys.argv[1:]:
+        run_trades_window()
+    else:
+        App(start_minimized="--minimized" in sys.argv[1:]).mainloop()

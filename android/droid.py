@@ -144,6 +144,40 @@ def move_to_background() -> None:
         log.debug("Back pressed on the home screen (ignored in the desktop preview).")
 
 
+def system_bar_overlap(window_height: int) -> tuple[int, int]:
+    """(top, bottom) pixels of the app hidden under the status bar / navigation bar.
+
+    Android 15 draws apps edge-to-edge, under the system bars; older versions don't. So this only
+    reports an overlap when the app's drawing surface really extends under the bars.
+    """
+    if not IS_ANDROID:
+        return 0, 0
+    try:
+        from jnius import autoclass  # type: ignore
+        activity = autoclass("org.kivy.android.PythonActivity").mActivity
+        decor = activity.getWindow().getDecorView()
+        insets = decor.getRootWindowInsets()
+        if insets is None:
+            return 0, 0
+        if autoclass("android.os.Build$VERSION").SDK_INT >= 30:
+            Type = autoclass("android.view.WindowInsets$Type")
+            bars = insets.getInsets(Type.systemBars() | Type.displayCutout())
+            top, bottom = int(bars.top), int(bars.bottom)
+        else:
+            top, bottom = int(insets.getSystemWindowInsetTop()), int(insets.getSystemWindowInsetBottom())
+        full = int(decor.getHeight())
+        if full <= 0:
+            return 0, 0
+        if window_height >= full - 2:          # drawn under both bars (edge-to-edge)
+            return top, bottom
+        if window_height >= full - bottom - 2:  # under the status bar only
+            return top, 0
+        return 0, 0
+    except Exception as e:
+        log.debug("Couldn't read system bar insets: %s", e)
+        return 0, 0
+
+
 def open_url(url: str) -> None:
     if IS_ANDROID:
         from jnius import autoclass  # type: ignore

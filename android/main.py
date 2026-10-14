@@ -21,6 +21,7 @@ from kivy.app import App  # noqa: E402
 from kivy.clock import Clock, mainthread  # noqa: E402
 from kivy.core.window import Window  # noqa: E402
 from kivy.factory import Factory  # noqa: E402
+from kivy.graphics import Color, Rectangle  # noqa: E402
 from kivy.lang import Builder  # noqa: E402
 from kivy.properties import BooleanProperty, ColorProperty, NumericProperty, StringProperty  # noqa: E402
 from kivy.uix.behaviors import ButtonBehavior  # noqa: E402
@@ -474,6 +475,9 @@ class RoliApp(App):
         self._update_url = ""
         self._stack: list[str] = []
         register_fonts()
+        from kivy.metrics import Metrics
+        if Metrics.fontscale > 1.2:  # very large system font sizes would push text out of the layout
+            Metrics.fontscale = 1.2
         Builder.load_file(str(HERE / "ui.kv"))
         self.sm = ScreenManager(transition=SlideTransition(duration=0.18))
         for screen in (HomeScreen(), EditScreen(), SettingsScreen(), HistoryScreen(), CookieScreen(),
@@ -493,7 +497,24 @@ class RoliApp(App):
         root.add_widget(self.sm)
         root.add_widget(self.nav)
         self.sm.bind(current=lambda _sm, name: setattr(self, "active_tab", name) if name in TABS else None)
+        self.root_box = root
+        self.inset_top = self.inset_bottom = 0
+        with root.canvas.before:  # fills the strip behind the gesture bar in the tab bar's colour
+            Color(*get_color_from_hex(P.SURFACE))
+            self._bottom_fill = Rectangle(pos=(0, 0), size=(0, 0))
+        Clock.schedule_once(self._apply_insets, 0.5)
+        Clock.schedule_once(self._apply_insets, 2.0)  # again once Android has finished laying out
+        Window.bind(on_resize=lambda *_: Clock.schedule_once(self._apply_insets, 0.3))
         return root
+
+    def _apply_insets(self, *_):
+        """Keeps the header and tab bar out from under Android 15's edge-to-edge system bars."""
+        top, bottom = droid.system_bar_overlap(int(Window.height))
+        self.inset_top, self.inset_bottom = top, bottom
+        self.root_box.padding = [0, top, 0, bottom]
+        self._bottom_fill.size = (Window.width, bottom)
+        if self.sm.current == "trades":
+            self.show_trades_view()
 
     def _load_cfg(self) -> Config:
         try:
@@ -556,8 +577,8 @@ class RoliApp(App):
     def _trades_area(self) -> tuple[int, int]:
         """Pixels between the trades tab's top bar and the bottom tab bar (Android view coordinates)."""
         from kivy.metrics import dp
-        top = int(dp(58))
-        return top, int(Window.height - top - self.nav.height)
+        top = self.inset_top + int(dp(58))
+        return top, int(Window.height - top - self.nav.height - self.inset_bottom)
 
     def show_trades_view(self):
         if self.trades_view:

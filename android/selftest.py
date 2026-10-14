@@ -120,6 +120,15 @@ class SelfTest:
     # ---- the test --------------------------------------------------------------
     def steps(self):
         app = self.app
+        # Nothing may sit under the status bar or the gesture/navigation bar (Android 15 edge-to-edge).
+        yield 2.5
+        top, bottom = droid.system_bar_overlap(int(Window.height))
+        header_top = app.sm.top
+        self.record("header and tab bar clear of the system bars",
+                    app.nav.y >= bottom - 1 and header_top <= Window.height - top + 1,
+                    f"window {Window.height}px, bars top {top} bottom {bottom}, tab bar at {app.nav.y:.0f}, "
+                    f"content top {header_top:.0f}")
+
         ok = yield from self.wait_until(lambda: app.catalog is not None, 90)
         self.record("item list loads", ok, f"{len(app.catalog) if app.catalog else 0} items")
         if not ok:

@@ -302,6 +302,59 @@ class SettingsScreen(Screen):
         app.toast("Settings saved")
 
 
+class PickerScreen(Screen):
+    """Full-screen item search: tap an item to add it to the ad being edited."""
+    title = StringProperty("Add item")
+
+    def open_for(self, side: str):
+        self.side = side
+        self.title = "Add item you offer" if side == "offer" else "Add item you want"
+        self.ids.search.text = ""
+        self.ids.results.clear_widgets()
+        self.ids.results.add_widget(Label(text="Type to search all Rolimons items.", color=(0.55, 0.58, 0.64, 1),
+                                          size_hint_y=None, height=40, font_size="14sp"))
+
+    def on_enter(self):
+        Clock.schedule_once(lambda *_: setattr(self.ids.search, "focus", True), 0.15)
+
+    def schedule_search(self):
+        Clock.unschedule(self.search)
+        Clock.schedule_once(self.search, 0.3)
+
+    def search(self, *_):
+        app = App.get_running_app()
+        box = self.ids.results
+        box.clear_widgets()
+        q = self.ids.search.text.strip().lower()
+        if not q:
+            return
+        if not app.catalog:
+            box.add_widget(Label(text="Item list still loading...", color=(0.55, 0.58, 0.64, 1),
+                                 size_hint_y=None, height=36))
+            return
+        matches = []
+        for item in app.catalog.items.values():
+            if q == str(item.id) or q in item.name.lower() or q == item.acronym.lower():
+                rank = 0 if q in (item.acronym.lower(), str(item.id)) else 1 if item.name.lower().startswith(q) else 2
+                matches.append((rank, -item.default_value, item.id))
+        matches.sort()
+        ids = [m[2] for m in matches[:30]]
+        for item_id in ids:
+            row = app.item_row(item_id)
+            row.add_action("Add", lambda i=item_id: self.choose(i), accent=True)
+            box.add_widget(row)
+        if not ids:
+            box.add_widget(Label(text="No matching items.", color=(0.55, 0.58, 0.64, 1), size_hint_y=None, height=36))
+        self.ids.scroll.scroll_y = 1
+        app.request_thumbs(ids)
+
+    def choose(self, item_id: int):
+        app = App.get_running_app()
+        if app.sm.get_screen("edit").add(self.side, item_id):
+            self.ids.search.focus = False
+            app.go_back()
+
+
 class EditScreen(Screen):
     index = NumericProperty(-1)
 
@@ -310,8 +363,6 @@ class EditScreen(Screen):
         self.ad = copy.deepcopy(ad)
         self.ids.name.text = ad.name
         self.ids.enabled.active = ad.enabled
-        self.ids.search.text = ""
-        self.ids.results.clear_widgets()
         tags = self.ids.tags
         tags.clear_widgets()
         self._chips = {}
@@ -345,7 +396,7 @@ class EditScreen(Screen):
                 row.add_action("×", lambda s=side, n=i: self.remove(s, n))
                 box.add_widget(row)
             if not ids:
-                box.add_widget(Label(text="Nothing yet: search below to add items.", color=(0.55, 0.58, 0.64, 1),
+                box.add_widget(Label(text="Nothing added yet.", color=(0.55, 0.58, 0.64, 1),
                                      size_hint_y=None, height=36, font_size="14sp"))
         self.ids.owned_hint.text = ("Highlighted items aren't in your Rolimons inventory, so this ad will be skipped."
                                     if missing else "")
@@ -366,49 +417,31 @@ class EditScreen(Screen):
         (self.ad.offer_item_ids if side == "offer" else self.ad.request_item_ids).pop(index)
         self.refresh()
 
-    def add(self, side: str, item_id: int):
+    def add(self, side: str, item_id: int) -> bool:
         app = App.get_running_app()
         if side == "offer":
             if len(self.ad.offer_item_ids) >= MAX_OFFER_ITEMS:
-                return app.toast(f"You can offer at most {MAX_OFFER_ITEMS} items.")
+                app.toast(f"You can offer at most {MAX_OFFER_ITEMS} items.")
+                return False
             self.ad.offer_item_ids.append(item_id)
         else:
             if self._slots() >= MAX_REQUEST_SLOTS:
-                return app.toast(f"You can want at most {MAX_REQUEST_SLOTS} items and tags.")
+                app.toast(f"You can want at most {MAX_REQUEST_SLOTS} items and tags.")
+                return False
             self.ad.request_item_ids.append(item_id)
-        app.toast("Added to " + ("offer" if side == "offer" else "want"))
         self.refresh()
+        return True
 
-    def schedule_search(self):
-        Clock.unschedule(self.search)
-        Clock.schedule_once(self.search, 0.3)
-
-    def search(self, *_):
+    def open_picker(self, side: str):
         app = App.get_running_app()
-        box = self.ids.results
-        box.clear_widgets()
-        q = self.ids.search.text.strip().lower()
-        if not q:
-            return
-        if not app.catalog:
-            box.add_widget(Label(text="Item list still loading...", color=(0.55, 0.58, 0.64, 1),
-                                 size_hint_y=None, height=36))
-            return
-        matches = []
-        for item in app.catalog.items.values():
-            if q == str(item.id) or q in item.name.lower() or q == item.acronym.lower():
-                rank = 0 if q in (item.acronym.lower(), str(item.id)) else 1 if item.name.lower().startswith(q) else 2
-                matches.append((rank, -item.default_value, item.id))
-        matches.sort()
-        ids = [m[2] for m in matches[:25]]
-        for item_id in ids:
-            row = app.item_row(item_id)
-            row.add_action("Offer", lambda i=item_id: self.add("offer", i), accent=True)
-            row.add_action("Want", lambda i=item_id: self.add("request", i))
-            box.add_widget(row)
-        if not ids:
-            box.add_widget(Label(text="No matching items.", color=(0.55, 0.58, 0.64, 1), size_hint_y=None, height=36))
-        app.request_thumbs(ids)
+        full = (len(self.ad.offer_item_ids) >= MAX_OFFER_ITEMS if side == "offer"
+                else self._slots() >= MAX_REQUEST_SLOTS)
+        if full:
+            limit = (f"You can offer at most {MAX_OFFER_ITEMS} items." if side == "offer"
+                     else f"You can want at most {MAX_REQUEST_SLOTS} items and tags.")
+            return app.toast(limit)
+        app.sm.get_screen("picker").open_for(side)
+        app.show("picker")
 
     def save(self):
         app = App.get_running_app()
@@ -481,7 +514,7 @@ class RoliApp(App):
         Builder.load_file(str(HERE / "ui.kv"))
         self.sm = ScreenManager(transition=SlideTransition(duration=0.18))
         for screen in (HomeScreen(), EditScreen(), SettingsScreen(), HistoryScreen(), CookieScreen(),
-                       TradesScreen(), HelpScreen()):
+                       TradesScreen(), HelpScreen(), PickerScreen()):
             self.sm.add_widget(screen)
         self.refresh_ads()
         self.update_cookie_status()
@@ -729,8 +762,10 @@ class RoliApp(App):
             self.switch_tab(screen)
         elif screen == "cookie":
             self.show(screen)
-        if droid.launch_extra("search"):
-            self.sm.get_screen("edit").ids.search.text = droid.launch_extra("search")
+        if droid.launch_extra("search") and self.cfg.ads:
+            self.sm.get_screen("edit").open_picker("offer")
+            self.show("picker")
+            self.sm.get_screen("picker").ids.search.text = droid.launch_extra("search")
         if droid.launch_extra("autostart") == "1":
             self.toggle_run()
         if droid.launch_extra("login") == "1":
@@ -804,10 +839,9 @@ class RoliApp(App):
     @mainthread
     def _thumbs_ready(self, ids):
         if self.sm.current == "edit":
-            edit = self.sm.get_screen("edit")
-            edit.refresh()
-            if edit.ids.search.text:
-                edit.search()
+            self.sm.get_screen("edit").refresh()
+        elif self.sm.current == "picker" and self.sm.get_screen("picker").ids.search.text:
+            self.sm.get_screen("picker").search()
 
     def _load_catalog(self):
         for attempt in range(4):

@@ -141,18 +141,24 @@ class SelfTest:
         edit = app.sm.get_screen("edit")
         self.record("editor opens", app.sm.current == "edit")
         edit.ids.name.text = AD_NAME
-        edit.ids.search.text = "dom"
-        ok = yield from self.wait_until(lambda: len(edit.ids.results.children) >= 5, 15)
-        self.record("item search shows results", ok, f"{len(edit.ids.results.children)} rows")
+        # "+ Add item you offer" opens the full-screen picker; tapping an item adds it and returns.
+        edit.open_picker("offer")
+        yield 1
+        picker = app.sm.get_screen("picker")
+        self.record("item picker opens", app.sm.current == "picker")
+        picker.ids.search.text = "dom"
+        ok = yield from self.wait_until(lambda: len(picker.ids.results.children) >= 5, 15)
+        self.record("item search shows results", ok, f"{len(picker.ids.results.children)} rows")
         yield from self.wait_until(lambda: False, 4)  # let item pictures load
         self.shot("1-search")
         item_id = max((i for i in app.catalog.items.values() if "dominus" in i.name.lower()),
                       key=lambda i: i.default_value).id
-        edit.add("offer", item_id)
+        picker.choose(item_id)
+        yield 1
         edit.toggle_tag("upgrade")
         yield 1
         self.dismiss_popups()
-        self.record("item added to the offer", item_id in edit.ad.offer_item_ids)
+        self.record("item added to the offer", item_id in edit.ad.offer_item_ids and app.sm.current == "edit")
         edit.ids.scroll.scroll_y = 1
         yield 1
         self.shot("2-editor")

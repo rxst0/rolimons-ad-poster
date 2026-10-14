@@ -479,6 +479,9 @@
                     spacing: dp(8)
                     size_hint_y: None
                     height: self.minimum_height
+                FlatButton:
+                    text: '+  Add item you offer'
+                    on_release: root.open_picker('offer')
                 Txt:
                     id: owned_hint
                     color: WARN
@@ -493,6 +496,9 @@
                     spacing: dp(8)
                     size_hint_y: None
                     height: self.minimum_height
+                FlatButton:
+                    text: '+  Add item you want'
+                    on_release: root.open_picker('request')
                 FieldLabel:
                     text: 'TAGS'
                 GridLayout:
@@ -503,18 +509,6 @@
                     height: self.minimum_height
                 Muted:
                     id: summary
-                Title:
-                    text: 'Add items'
-                Field:
-                    id: search
-                    hint_text: 'Search by name, acronym or ID'
-                    on_text: root.schedule_search()
-                BoxLayout:
-                    id: results
-                    orientation: 'vertical'
-                    spacing: dp(8)
-                    size_hint_y: None
-                    height: self.minimum_height
                 Widget:
                     size_hint_y: None
                     height: dp(8)
@@ -862,3 +856,34 @@
                     text: root.text
                     font_size: sp(14)
                     color: TEXT
+
+<PickerScreen>:
+    name: 'picker'
+    BoxLayout:
+        orientation: 'vertical'
+        canvas.before:
+            Color:
+                rgba: BG
+            Rectangle:
+                pos: self.pos
+                size: self.size
+        TopBar:
+            title: root.title
+        BoxLayout:
+            size_hint_y: None
+            height: dp(72)
+            padding: dp(14), dp(12), dp(14), dp(12)
+            Field:
+                id: search
+                hint_text: 'Search by name, acronym or ID'
+                on_text: root.schedule_search()
+        ScrollView:
+            id: scroll
+            do_scroll_x: False
+            BoxLayout:
+                id: results
+                orientation: 'vertical'
+                spacing: dp(8)
+                padding: dp(14), dp(0), dp(14), dp(24)
+                size_hint_y: None
+                height: self.minimum_height

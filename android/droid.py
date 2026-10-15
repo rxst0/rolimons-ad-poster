@@ -144,7 +144,7 @@ def active_notification_titles() -> list[str]:
     for sbn in manager.getActiveNotifications():
         title = sbn.getNotification().extras.getCharSequence("android.title")
         if title is not None:
-            titles.append(str(title.toString()))
+            titles.append(str(title))  # pyjnius already converts CharSequence to str
     return titles
 
 

@@ -63,7 +63,8 @@ class PostHistory:
             items = [{"t": a["t"], "code": "legacy",
                       "params": {"ad": a.get("ad", ""), "result": a.get("result", ""), "message": a.get("message", "")},
                       "raw": a.get("message", "")} for a in self.attempts]
-        return sorted(items, key=lambda e: e["t"], reverse=True)
+        # Reversed first so entries with the same timestamp (coarse clocks) still come out newest first.
+        return sorted(reversed(items), key=lambda e: e["t"], reverse=True)
 
     def last_post_time(self) -> float | None:
         return self.posts[-1]["t"] if self.posts else None

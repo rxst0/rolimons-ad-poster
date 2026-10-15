@@ -30,6 +30,8 @@ services = Poster:service.py:foreground:sticky:foregroundServiceType=specialUse
 
 # Java helper for the view-only Received trades tab (android/java/org/roliposter/).
 android.add_src = java
+# One app window: tapping a notification switches tab in the open app instead of starting another copy.
+android.manifest.launch_mode = singleTask
 
 android.permissions = INTERNET, ACCESS_NETWORK_STATE, FOREGROUND_SERVICE, FOREGROUND_SERVICE_SPECIAL_USE, POST_NOTIFICATIONS, WAKE_LOCK, REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
 

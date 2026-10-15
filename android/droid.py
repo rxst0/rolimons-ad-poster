@@ -15,6 +15,10 @@ PACKAGE = "io.github.rxst0.rolimonsadposter"
 SERVICE_CLASS = f"{PACKAGE}.ServicePoster"
 ROLIMONS_URL = "https://www.rolimons.com/"
 NOTIFY_CHANNEL = "alerts"
+CHANNEL_POSTING = "posting"
+CHANNEL_TRADES = "trades"
+POSTING_NOTIFICATION_ID = 3001  # pause/resume/stop share one slot, so the newest replaces the last
+OPEN_TAB_EXTRA = "roliposter_open_tab"
 
 
 def data_home() -> Path:
@@ -76,26 +80,31 @@ def request_notification_permission() -> None:
         log.debug("Notification permission request failed: %s", e)
 
 
-def notify(title: str, text: str, notification_id: int = 2001) -> None:
-    """Shows a notification that opens the app when tapped."""
+TABS_FROM_NOTIFICATIONS = ("history", "trades", "home")
+
+
+def notify(title: str, text: str, notification_id: int = 2001, channel: str = NOTIFY_CHANNEL,
+           tab: str | None = None) -> None:
+    """Shows a notification; tapping it opens the app (on `tab` if given)."""
     if not IS_ANDROID:
         log.info("[notification] %s: %s", title, text)
         return
     try:
         from jnius import autoclass, cast  # type: ignore
         Context = autoclass("android.content.Context")
-        NotificationManager = autoclass("android.app.NotificationManager")
-        NotificationChannel = autoclass("android.app.NotificationChannel")
         Builder = autoclass("android.app.Notification$Builder")
         PendingIntent = autoclass("android.app.PendingIntent")
         ctx = _context()
         manager = cast("android.app.NotificationManager", ctx.getSystemService(Context.NOTIFICATION_SERVICE))
-        manager.createNotificationChannel(
-            NotificationChannel(NOTIFY_CHANNEL, _jstr("Alerts"), NotificationManager.IMPORTANCE_DEFAULT))
+        ensure_channels(manager)
         launch = ctx.getPackageManager().getLaunchIntentForPackage(ctx.getPackageName())
-        pending = PendingIntent.getActivity(ctx, 0, launch,
+        if tab in TABS_FROM_NOTIFICATIONS:
+            launch.putExtra(OPEN_TAB_EXTRA, tab)
+        # A different request code per tab, so each notification keeps its own "open this tab" extra.
+        pending = PendingIntent.getActivity(ctx, 100 + TABS_FROM_NOTIFICATIONS.index(tab) if tab in
+                                            TABS_FROM_NOTIFICATIONS else 0, launch,
                                             PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT)
-        builder = Builder(ctx, NOTIFY_CHANNEL)
+        builder = Builder(ctx, channel)
         builder.setContentTitle(_jstr(title))
         builder.setContentText(_jstr(text))
         builder.setStyle(autoclass("android.app.Notification$BigTextStyle")().bigText(_jstr(text)))
@@ -105,6 +114,54 @@ def notify(title: str, text: str, notification_id: int = 2001) -> None:
         manager.notify(notification_id, builder.build())
     except Exception as e:
         log.warning("Couldn't show a notification: %s", e)
+
+
+def ensure_channels(manager=None) -> None:
+    """Notification channels (Android lets the user mute each one separately in system settings)."""
+    if not IS_ANDROID:
+        return
+    from jnius import autoclass, cast  # type: ignore
+    NotificationManager = autoclass("android.app.NotificationManager")
+    NotificationChannel = autoclass("android.app.NotificationChannel")
+    if manager is None:
+        Context = autoclass("android.content.Context")
+        manager = cast("android.app.NotificationManager", _context().getSystemService(Context.NOTIFICATION_SERVICE))
+    for channel_id, name, importance in (
+            (CHANNEL_POSTING, "Posting paused, resumed or stopped", NotificationManager.IMPORTANCE_HIGH),
+            (CHANNEL_TRADES, "New trades", NotificationManager.IMPORTANCE_HIGH),
+            (NOTIFY_CHANNEL, "Other alerts", NotificationManager.IMPORTANCE_DEFAULT)):
+        manager.createNotificationChannel(NotificationChannel(channel_id, _jstr(name), importance))
+
+
+def active_notification_titles() -> list[str]:
+    """Titles of this app's notifications currently shown (used by the self-test)."""
+    if not IS_ANDROID:
+        return []
+    from jnius import autoclass, cast  # type: ignore
+    Context = autoclass("android.content.Context")
+    manager = cast("android.app.NotificationManager", _context().getSystemService(Context.NOTIFICATION_SERVICE))
+    titles = []
+    for sbn in manager.getActiveNotifications():
+        title = sbn.getNotification().extras.getCharSequence("android.title")
+        if title is not None:
+            titles.append(str(title.toString()))
+    return titles
+
+
+def opened_tab(intent=None) -> str | None:
+    """The tab a tapped notification asked for (works in release builds; only a fixed set of tabs)."""
+    if not IS_ANDROID:
+        return None
+    try:
+        from jnius import autoclass  # type: ignore
+        intent = intent or autoclass("org.kivy.android.PythonActivity").mActivity.getIntent()
+        value = intent.getStringExtra(OPEN_TAB_EXTRA) if intent is not None else None
+        if value is not None:
+            intent.removeExtra(OPEN_TAB_EXTRA)  # handle it once
+        value = str(value) if value else None
+        return value if value in TABS_FROM_NOTIFICATIONS else None
+    except Exception:
+        return None
 
 
 # ---- battery optimisation -------------------------------------------------------
@@ -240,7 +297,12 @@ class TradesView:
         from android.runnable import run_on_ui_thread  # type: ignore
         run_on_ui_thread(self._show_ui)(int(top_px), int(height_px))
 
-    def _show_ui(self, top_px: int, height_px: int) -> None:
+    def preload(self, top_px: int, height_px: int) -> None:
+        """Creates the page hidden, so new-trade checks run without opening the tab."""
+        from android.runnable import run_on_ui_thread  # type: ignore
+        run_on_ui_thread(self._show_ui)(int(top_px), int(height_px), False)
+
+    def _show_ui(self, top_px: int, height_px: int, visible: bool = True) -> None:
         from jnius import autoclass  # type: ignore
         FrameParams = autoclass("android.widget.FrameLayout$LayoutParams")
         Gravity = autoclass("android.view.Gravity")
@@ -260,13 +322,17 @@ class TradesView:
             settings.setDomStorageEnabled(True)
             web.setBackgroundColor(Color.parseColor(BG))
             web.setWebViewClient(Client(self.page_script))
+            # Bridge for the new-trade check: it only accepts trade IDs and sender names (see TradeNotifier).
+            web.addJavascriptInterface(trade_notifier(), "RoliTrades")
             cookies = CookieManager.getInstance()
             cookies.setAcceptCookie(True)
             cookies.setAcceptThirdPartyCookies(web, True)
+            if not visible:
+                web.setVisibility(View.INVISIBLE)
             activity.addContentView(web, params)
             web.loadUrl(self.url)
             self._web = web
-        else:
+        elif visible:
             self._web.setLayoutParams(params)
             self._web.setVisibility(View.VISIBLE)
 
@@ -277,7 +343,8 @@ class TradesView:
 
         def hide_ui():
             from jnius import autoclass  # type: ignore
-            self._web.setVisibility(autoclass("android.view.View").GONE)
+            # INVISIBLE (not GONE) keeps the page running, so the new-trade check carries on.
+            self._web.setVisibility(autoclass("android.view.View").INVISIBLE)
         run_on_ui_thread(hide_ui)()
 
     def _on_ui(self, func) -> None:
@@ -325,6 +392,32 @@ class TradesView:
     def blocked_count() -> int:
         from jnius import autoclass  # type: ignore
         return int(autoclass("org.roliposter.ViewOnlyWebViewClient").blockedCount)
+
+
+_notifier = None
+
+
+def trade_notifier():
+    """The one org.roliposter.TradeNotifier ("New trade from X" notifications)."""
+    global _notifier
+    if _notifier is None:
+        from jnius import autoclass  # type: ignore
+        _notifier = autoclass("org.roliposter.TradeNotifier")(_context())
+    return _notifier
+
+
+def autoclass_notifier():
+    """The TradeNotifier class itself (static counters, used by the self-test)."""
+    from jnius import autoclass  # type: ignore
+    return autoclass("org.roliposter.TradeNotifier")
+
+
+def set_trade_notifications(enabled: bool) -> None:
+    if IS_ANDROID:
+        try:
+            trade_notifier().setEnabled(bool(enabled))
+        except Exception as e:
+            log.warning("Couldn't change trade notifications: %s", e)
 
 
 def sign_out_web() -> None:

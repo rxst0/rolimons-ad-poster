@@ -14,7 +14,8 @@ Fully open source, with no servers involved: each device posts on its own.
 - Skips ads offering items you no longer own
 - Runs in the system tray, can start with Windows, and can start posting automatically
 - Windows notifications when posting stops, when your cookie is about to expire, or when an update is out
-- Optional posting hours (for example 09:00–23:00), a post history, and a "Skip to next ad" button
+- Optional posting hours (for example 09:00–23:00), a plain-English history of every post, pause and problem
+  (with what to do about it), and a "Skip to next ad" button
 - Value checks: warns about overpaying ads and can favor high-demand ads
 - **Received trades (PC):** see the trades people send you on Roblox, view-only, in its own tab
 
@@ -40,7 +41,8 @@ Click **More info → Run anyway**. You can always read the source code here and
 3. Open **Rolimons Ad Poster**, tap **Sign in to Rolimons**, and log in and verify like on the website.
    The app picks up your cookie by itself, so there's nothing to copy.
 4. Add your ads and tap **Start posting**. A notification stays in your status bar while it posts, even with
-   the screen off. In **Settings**, tap **Allow running in the background** so Android doesn't pause it.
+   the screen off. You're notified when posting pauses (daily ad limit, posting hours, no internet), resumes
+   or stops, and (once you've signed in to Roblox in the Trades tab) when someone sends you a new trade. In **Settings**, tap **Allow running in the background** so Android doesn't pause it.
    Some phones (Samsung, Xiaomi, OnePlus) also have their own battery saver: set the app to *Unrestricted* there.
 
 To update, install the newer APK over the old one; your ads and cookie are kept. The app tells you when one is out.

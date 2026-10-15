@@ -7,6 +7,7 @@ from pathlib import Path
 
 import requests
 
+from . import events as ev
 from .api import Outcome, PostResult, RolimonsClient
 from .config import Ad, Config, ConfigError, load_config, validate_config
 from .inventory import Inventory, fetch_inventory, missing_offer_items
@@ -41,8 +42,12 @@ def fmt_duration(seconds: float) -> str:
 
 class Poster:
     def __init__(self, cfg: Config, config_path: Path, cookie: str, catalog: ItemCatalog,
-                 stop_event: threading.Event | None = None, session: requests.Session | None = None):
+                 stop_event: threading.Event | None = None, session: requests.Session | None = None,
+                 on_event=None):
         self.cfg = cfg
+        self.on_event = on_event  # called with each History event (the Android service turns some into notifications)
+        self._paused: str | None = None  # what posting is paused for, so the resume can say so
+        self._retry_wait = 0.0  # seconds spent retrying unreachable Rolimons since the last success
         self.config_path = config_path
         self.catalog = catalog
         self.stop_event = stop_event or threading.Event()
@@ -83,6 +88,25 @@ class Poster:
             self.wait_until = None
         return not self.stopped
 
+    def emit(self, code: str, params: dict | None = None, raw: str = "") -> None:
+        event = self.history.record_event(code, params, raw)
+        if self.on_event is not None:
+            try:
+                self.on_event(event)
+            except Exception:
+                log.exception("Event callback failed")
+
+    def _pause(self, code: str, params: dict, label: str) -> None:
+        if self._paused != label:
+            self._paused = label
+            self.emit(code, params)
+
+    def _resume(self) -> None:
+        if self._paused:
+            after = self._paused
+            self._paused = None
+            self.emit(ev.RESUMED, {"after": after, "next_ad": self.next_ad.name if self.next_ad else ""})
+
     def skip_next(self) -> Ad | None:
         """Replaces the planned next ad with the one after it. Safe to call from another thread."""
         with self._lock:
@@ -98,6 +122,7 @@ class Poster:
                  len(self.cfg.enabled_ads()), self.cfg.rotation,
                  self.cfg.value_mode.strategy if self.cfg.value_mode.enabled else "off")
         consecutive_failures = 0
+        self.emit(ev.STARTED, {"ads": len(self.cfg.enabled_ads())})
         try:
             if not self._wait_initial_cooldown():
                 return
@@ -122,6 +147,7 @@ class Poster:
                 if result.outcome is Outcome.SUCCESS:
                     consecutive_failures = 0
                     self.history.record(ad.name)
+                    self.emit(ev.POSTED, {"ad": ad.name}, result.raw)
                     log.info("Posted %d ad(s) in the last 24h (cap %d).",
                              self.history.count_24h(), self.cfg.max_ads_per_24h)
                     self._plan_next()
@@ -129,8 +155,10 @@ class Poster:
                         return
                 else:
                     consecutive_failures += 1
+                    self.emit(ev.REJECTED, {"ad": ad.name, "reason": result.message}, result.raw)
                     if consecutive_failures >= max(1, len(self.cfg.enabled_ads())):
                         log.error("Every enabled ad failed in a row; stopping. Check the messages above.")
+                        self.emit(ev.STOPPED_ALL_FAILED)
                         return
                     self._plan_next()
                     if not self.sleep(REJECT_PAUSE_SECONDS, "ad not posted, moving to next ad"):
@@ -150,6 +178,7 @@ class Poster:
         result = self._post_with_retries(ad)
         if result is not None and result.outcome is Outcome.SUCCESS:
             self.history.record(ad.name)
+            self.emit(ev.POSTED, {"ad": ad.name}, result.raw)
             return True
         return False
 
@@ -170,14 +199,26 @@ class Poster:
         wait = self.history.seconds_until_quota(self.cfg.max_ads_per_24h)
         if wait <= 0:
             return True
-        return self.sleep(wait + random.uniform(10, 60), f"reached {self.cfg.max_ads_per_24h} ads in 24h")
+        wait += random.uniform(10, 60)
+        self._pause(ev.PAUSED_DAILY_LIMIT, {"count": self.history.count_24h(), "cap": self.cfg.max_ads_per_24h,
+                                            "resume_at": time.time() + wait}, "The daily ad limit")
+        if not self.sleep(wait, f"reached {self.cfg.max_ads_per_24h} ads in 24h"):
+            return False
+        self._resume()
+        return True
 
     def _wait_for_posting_hours(self) -> bool:
         wait = seconds_until_allowed(self.cfg.posting_hours)
         if wait <= 0:
             return True
+        wait += random.uniform(10, 90)
         hours = self.cfg.posting_hours
-        return self.sleep(wait + random.uniform(10, 90), f"outside posting hours ({hours.start}-{hours.end})")
+        self._pause(ev.PAUSED_HOURS, {"start": hours.start, "end": hours.end, "resume_at": time.time() + wait},
+                    "The pause outside your posting hours")
+        if not self.sleep(wait, f"outside posting hours ({hours.start}-{hours.end})"):
+            return False
+        self._resume()
+        return True
 
     def _backoff(self, failures: int) -> float:
         return min(BACKOFF_BASE_SECONDS * 2 ** (failures - 1), BACKOFF_MAX_SECONDS) * random.uniform(0.8, 1.2)
@@ -202,8 +243,13 @@ class Poster:
             self._log_attempt(ad, result)
             outcome = result.outcome
             if outcome in (Outcome.SUCCESS, Outcome.REJECTED):
+                self._retry_wait = 0.0
+                if self._paused == ev.PAUSED_OFFLINE:
+                    self._paused = "The connection problem"
+                    self._resume()
                 return result
             if outcome is Outcome.AUTH_ERROR:
+                self.emit(ev.STOPPED_AUTH, {}, result.raw or result.message)
                 raise AuthError(result.message)
             if outcome is Outcome.COOLDOWN:
                 cooldown_hits += 1
@@ -218,6 +264,13 @@ class Poster:
                 failures += 1
                 wait = result.retry_after or self._backoff(failures)
                 reason = f"{outcome.value.lower()} #{failures}, backing off"
+                # Transient failures are retried quietly; only a long outage counts as a pause.
+                self._retry_wait += wait
+                if self._retry_wait >= ev.OFFLINE_PAUSE_SECONDS and self._paused != ev.PAUSED_OFFLINE:
+                    self._paused = ev.PAUSED_OFFLINE
+                    kind = "server" if outcome is Outcome.SERVER_ERROR else "network"
+                    self.emit(ev.PAUSED_OFFLINE, {"reason": kind, "minutes": int(self._retry_wait // 60)},
+                              result.raw or result.message)
             if not self.sleep(wait, reason):
                 return None
         return None
@@ -254,6 +307,7 @@ class Poster:
                 if self.unavailable.get(name) != missing:
                     names = ", ".join(self._item_name(i) for i in missing)
                     log.warning("Skipping ad '%s': you don't own %s.", name, names)
+                    self.emit(ev.SKIPPED_UNOWNED, {"ad": name, "items": [self._item_name(i) for i in missing]})
             self.unavailable = unavailable
             ads = [a for a in ads if a.name not in unavailable]
         return ads

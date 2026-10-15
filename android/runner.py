@@ -63,23 +63,41 @@ def wants_running(home: Path) -> bool:
     return (home / WANT_RUNNING_FILE).exists()
 
 
-def run(home: Path) -> dict:
-    """Runs posting until stopped. Returns the final status dict (with 'error' / 'stopped_by_user')."""
+def run(home: Path, on_event=None) -> dict:
+    """Runs posting until stopped. Returns the final status dict (with 'error' / 'stopped_by_user').
+
+    on_event(event) is called for each History event (see roliposter/events.py); the Android service uses
+    it to send notifications. Stops that happen outside the posting loop are recorded here too.
+    """
     os.environ["ROLIPOSTER_HOME"] = str(home)
     home.mkdir(parents=True, exist_ok=True)
     import requests
 
+    from roliposter import events as ev
     from roliposter.logsetup import setup_logging
-    from roliposter.paths import config_path, log_dir
+    from roliposter.paths import config_path, log_dir, state_path
     from roliposter.poster import AuthError, Poster
     from roliposter.startup import StartupError, prepare
+    from roliposter.state import PostHistory
 
     setup_logging(log_dir())
     control = home / CONTROL_FILE
     if control.exists():
         control.unlink()  # ignore commands left over from a previous run
     stop_event = threading.Event()
-    state = {"poster": None, "done": False, "error": None, "stopped_by_user": False}
+    state = {"poster": None, "done": False, "error": None, "stopped_by_user": False, "last": None}
+
+    def handle(event: dict) -> None:
+        state["last"] = event
+        if on_event is not None:
+            try:
+                on_event(event)
+            except Exception:
+                log.exception("Event handler failed")
+
+    def record(code: str, params: dict | None = None) -> None:
+        """Records a stop that happened outside the posting loop (it records its own events)."""
+        handle(PostHistory(state_path()).record_event(code, params or {}))
 
     def snapshot() -> dict:
         p = state["poster"]
@@ -116,25 +134,31 @@ def run(home: Path) -> dict:
         session = requests.Session()
         cfg, cookie, catalog = prepare(config_path(), session, stop_event)
         if not stop_event.is_set():
-            state["poster"] = Poster(cfg, config_path(), cookie, catalog, stop_event, session)
+            state["poster"] = Poster(cfg, config_path(), cookie, catalog, stop_event, session, on_event=handle)
             state["poster"].run()
     except AuthError as e:
-        log.error("Rolimons rejected your cookie: %s", e)
-        state["error"] = (f"Rolimons rejected your cookie (\"{e}\"). Sign in to Rolimons again "
-                          "or paste a fresh cookie, then start again.")
+        log.error("Rolimons rejected your cookie: %s", e)  # the poster already recorded STOPPED_AUTH
     except StartupError as e:
         log.error("%s", e)
-        state["error"] = str(e)
+        record(ev.STOPPED_ERROR, {"reason": str(e)})
     except Exception:
         log.exception("Unexpected error")
-        state["error"] = "Something went wrong. See History > Activity for details."
+        record(ev.STOPPED_ERROR, {"reason": "An unexpected error occurred (details are in the log)."})
     finally:
         state["done"] = True
         stop_event.set()  # wakes the status loop so it exits before the final write
         status_thread.join(timeout=5)
-        if not state["error"] and not state["stopped_by_user"]:
-            state["error"] = "Posting stopped. See History > Activity for details."
+        last = state["last"]
+        if state["stopped_by_user"]:
+            record(ev.STOPPED_BY_USER)
+        elif last is None or not last["code"].startswith("stopped"):
+            record(ev.STOPPED_ERROR, {"reason": "Posting ended unexpectedly."})
+        if not state["stopped_by_user"]:
+            info = ev.describe(state["last"])
+            state["error"] = " ".join(part for part in (info.body, info.action) if part)
+            state["error_title"] = info.title
         final = snapshot()
         final["running"] = False
+        final["error_title"] = state.get("error_title")
         write_json(home / STATUS_FILE, final)
     return final

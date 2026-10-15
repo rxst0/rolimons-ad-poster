@@ -22,15 +22,32 @@ def main() -> None:
     wake = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RolimonsAdPoster::posting")
     wake.acquire()
     try:
-        final = runner.run(home)
+        runner.run(home, on_event=notify_event)
     finally:
         if wake.isHeld():
             wake.release()
     runner.set_want_running(home, False)
     service.setAutoRestartService(False)
-    if not final.get("stopped_by_user"):
-        droid.notify("Posting stopped", final.get("error") or "Open the app to see why.")
     service.stopSelf()
+
+
+def notify_event(event: dict) -> None:
+    """Pauses, resumes and stops become a phone notification (they share one slot, so 'resumed'
+    replaces 'paused'). Tapping it opens the History tab."""
+    from roliposter import events as ev
+    from roliposter.config import load_config
+    from roliposter.paths import config_path
+    info = ev.describe(event)
+    if not info.notify:
+        return
+    try:
+        if not load_config(config_path()).app.notifications:
+            return
+    except Exception:
+        pass
+    body = " ".join(part for part in (info.body, info.action) if part)
+    droid.notify(info.title, body, notification_id=droid.POSTING_NOTIFICATION_ID,
+                 channel=droid.CHANNEL_POSTING, tab="history")
 
 
 main()

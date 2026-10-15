@@ -630,6 +630,9 @@
                         id: notify_on
                         text: 'Show notifications'
                     SettingRow:
+                        id: trade_notify_on
+                        text: 'Notify me about new Roblox trades'
+                    SettingRow:
                         id: updates_on
                         text: 'Check for updates'
                     Muted:
@@ -650,6 +653,60 @@
                 AccentButton:
                     text: 'Save settings'
                     on_release: root.save()
+
+<EventRow>:
+    size_hint_y: None
+    height: max(dp(58), sub.texture_size[1] + head.texture_size[1] + dp(22))
+    padding: 0, 0, dp(10), 0
+    spacing: dp(10)
+    canvas.before:
+        Color:
+            rgba: HOVER if self.state == 'down' else FIELD
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(10)]
+        Color:
+            rgba: root.marker
+        RoundedRectangle:
+            pos: self.x, self.y
+            size: dp(5), self.height
+            radius: [dp(10), 0, 0, dp(10)]
+    Widget:
+        size_hint_x: None
+        width: dp(6)
+    BoxLayout:
+        orientation: 'vertical'
+        padding: 0, dp(8)
+        spacing: dp(3)
+        Label:
+            id: head
+            text: root.title
+            bold: True
+            color: TEXT
+            font_size: sp(15)
+            size_hint_y: None
+            height: self.texture_size[1]
+            text_size: self.width, None
+            halign: 'left'
+            shorten: True
+            shorten_from: 'right'
+            max_lines: 1
+        Label:
+            id: sub
+            text: root.subtitle
+            color: MUTED
+            font_size: sp(13)
+            size_hint_y: None
+            height: self.texture_size[1]
+            text_size: self.width, None
+            halign: 'left'
+            max_lines: 2
+    Label:
+        text: '>'
+        color: MUTED
+        size_hint_x: None
+        width: dp(12)
 
 <HistoryScreen>:
     name: 'history'
@@ -675,20 +732,41 @@
                 Muted:
                     id: summary
                 BoxLayout:
-                    id: attempts
+                    size_hint_y: None
+                    height: dp(40)
+                    spacing: dp(8)
+                    Chip:
+                        id: filter_all
+                        text: 'All'
+                        on_release: root.set_filter('all')
+                    Chip:
+                        id: filter_posted
+                        text: 'Posted'
+                        on_release: root.set_filter('posted')
+                    Chip:
+                        id: filter_problems
+                        text: 'Problems'
+                        on_release: root.set_filter('problems')
+                BoxLayout:
+                    id: events
                     orientation: 'vertical'
                     spacing: dp(8)
                     size_hint_y: None
                     height: self.minimum_height
-                Title:
-                    text: 'Activity'
+                Muted:
+                    text: 'Tap an entry to see what to do about it.'
+                GhostButton:
+                    text: 'Hide technical log' if root.show_log else 'Show technical log'
+                    size_hint_y: None
+                    height: dp(44)
+                    on_release: root.toggle_log()
                 Label:
                     id: activity
                     font_name: 'RobotoMono-Regular'
                     font_size: sp(11)
                     color: MUTED
                     size_hint_y: None
-                    height: self.texture_size[1]
+                    height: self.texture_size[1] if self.text else 0
                     text_size: self.width, None
 
 <CookieScreen>:

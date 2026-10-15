@@ -57,6 +57,29 @@ VIEW_ONLY_JS = r"""
 """
 
 
+# Android only: checks the inbound-trades list every few minutes (a read-only GET made by the Roblox page
+# itself, with its own session) and passes trade IDs + sender names to org.roliposter.TradeNotifier,
+# which shows "New trade from X". Does nothing where that bridge doesn't exist (the PC app).
+TRADE_POLL_JS = r"""
+(() => {
+  if (window.__roliTradePoll || !window.RoliTrades || !/(^|\.)roblox\.com$/.test(location.hostname)) return;
+  window.__roliTradePoll = true;
+  const check = () => {
+    if (!RoliTrades.isEnabled()) return;
+    fetch('https://trades.roblox.com/v1/trades/inbound?limit=10&sortOrder=Desc', {credentials: 'include'})
+      .then(r => r.ok ? r.json() : null)
+      .then(body => {
+        if (!body || !Array.isArray(body.data)) return;
+        RoliTrades.report(JSON.stringify(body.data.map(t => ({
+          id: String(t.id), name: String((t.user && t.user.name) || '')}))));
+      })
+      .catch(() => {});
+  };
+  check();
+  setInterval(check, 150000);
+})();
+"""
+
 def is_roblox_host(host: str) -> bool:
     host = host.lower().rstrip(".")
     return host == "roblox.com" or host.endswith(".roblox.com")

@@ -12,7 +12,7 @@ from tkinter import messagebox, ttk
 
 import requests
 
-from roliposter import __version__, autostart, trades_viewer
+from roliposter import __version__, autostart, events, trades_viewer
 from roliposter import theme
 from roliposter.config import (MAX_OFFER_ITEMS, MAX_REQUEST_SLOTS, VALID_TAGS, Ad, Config, ConfigError,
                                load_config, save_config, validate_config)
@@ -82,6 +82,10 @@ RUNNING IN THE BACKGROUND
 - Settings > App: start with Windows, start posting automatically,
   notifications and update checks.
 - Settings > Schedule: only post during certain hours.
+
+HISTORY
+- Every post, pause and problem in plain English. "Problems" shows only what
+  went wrong; select an entry to see what to do about it and Rolimons' reply.
 
 SAFETY
 - This app only posts Rolimons trade ads. It never sends Roblox trades and
@@ -643,38 +647,77 @@ class SettingsPage(Page):
 
 
 class HistoryPage(Page):
-    RESULT_TAGS = {"SUCCESS": "ok", "COOLDOWN": "warn", "RATE_LIMITED": "warn", "AUTH_ERROR": "bad",
-                   "REJECTED": "bad", "NETWORK_ERROR": "warn", "SERVER_ERROR": "warn"}
+    """What the poster did, in plain English (roliposter/events.py). Select an entry for what to do."""
+    SEVERITY_TAGS = {events.OK: "ok", events.WARN: "warn", events.ERROR: "bad"}
+    HINT = "Select an entry to see what happened and what to do about it."
 
     def __init__(self, parent: tk.Misc, app: "App"):
         super().__init__(parent, app)
-        outer = card(self, "Post history")
+        self.filter = "all"
+        self.rows: dict[str, tuple[dict, events.EventInfo]] = {}
+        outer = card(self, "History")
         outer.pack(fill="both", expand=True)
         self.summary = ttk.Label(outer.head, text="", style="Muted.TLabel")
         self.summary.pack(side="left", padx=(10, 0), pady=(3, 0))
         ttk.Button(outer.head, text="Refresh", command=self.refresh).pack(side="right")
-        wrap, self.tree = scrolled_tree(outer, ("when", "ad", "result", "message"), 14)
-        for col, text, width in (("when", "WHEN", 150), ("ad", "AD", 190), ("result", "RESULT", 120),
-                                 ("message", "DETAILS", 320)):
+        self.filter_buttons = {}
+        for key, label in reversed(events.FILTERS):
+            btn = ttk.Button(outer.head, text=label, command=lambda k=key: self.set_filter(k))
+            btn.pack(side="right", padx=(0, 6))
+            self.filter_buttons[key] = btn
+        wrap, self.tree = scrolled_tree(outer, ("time", "what", "details"), 12, show="tree headings")
+        self.tree.heading("#0", text="DAY", anchor="w")
+        self.tree.column("#0", width=110, stretch=False)
+        for col, text, width in (("time", "TIME", 90), ("what", "WHAT HAPPENED", 300), ("details", "DETAILS", 380)):
             self.tree.heading(col, text=text, anchor="w")
-            self.tree.column(col, width=width, stretch=col == "message")
+            self.tree.column(col, width=width, stretch=col == "details")
+        self.tree.tag_configure("day", foreground=theme.MUTED)
+        self.tree.bind("<<TreeviewSelect>>", lambda _e: self._show_details())
         wrap.pack(fill="both", expand=True)
-        self.empty = ttk.Label(wrap, text="Nothing posted yet.", style="Muted.TLabel", background=theme.FIELD)
+        self.empty = ttk.Label(wrap, text="", style="Muted.TLabel", background=theme.FIELD)
+        self.detail_title = ttk.Label(outer, text="", style="Title.TLabel")
+        self.detail_title.pack(anchor="w", pady=(12, 2))
+        self.detail = ttk.Label(outer, text=self.HINT, style="Muted.TLabel", justify="left", wraplength=820)
+        self.detail.pack(anchor="w", fill="x")
+        outer.bind("<Configure>", lambda e: self.detail.config(wraplength=max(300, e.width - 40)))
+
+    def set_filter(self, key: str) -> None:
+        self.filter = key
+        self.refresh()
 
     def refresh(self) -> None:
-        attempts = list(reversed(PostHistory(state_path()).attempts))
-        posted = sum(1 for a in attempts if a["result"] == "SUCCESS")
-        self.summary.config(text=f"{len(attempts)} attempts  ·  {posted} posted")
+        history = PostHistory(state_path())
+        timeline = history.timeline()
+        self.summary.config(text=events.summary(timeline, history.count_24h(), self.app.cfg.max_ads_per_24h))
+        for key, btn in self.filter_buttons.items():
+            btn.config(style="Accent.TButton" if key == self.filter else "TButton")
         self.tree.delete(*self.tree.get_children())
-        for n, a in enumerate(attempts):
-            when = time.strftime("%d %b  %H:%M:%S", time.localtime(a["t"]))
-            result = a["result"].replace("_", " ").title()
-            tags = (("odd",) if n % 2 else ()) + (self.RESULT_TAGS.get(a["result"], ""),)
-            self.tree.insert("", "end", values=(when, a["ad"], result, a.get("message", "")), tags=tags)
-        if attempts:
+        self.rows.clear()
+        groups = events.grouped(timeline, self.filter, limit=300)
+        for day, entries in groups:
+            parent = self.tree.insert("", "end", text=day, open=True, tags=("day",))
+            for n, (event, info) in enumerate(entries):
+                tags = (("odd",) if n % 2 else ()) + (self.SEVERITY_TAGS.get(info.severity, ""),)
+                iid = self.tree.insert(parent, "end", text="", tags=tags,
+                                       values=(events.time_label(event["t"]), info.title, info.body))
+                self.rows[iid] = (event, info)
+        if groups:
             self.empty.place_forget()
         else:
+            self.empty.config(text={"posted": "No ads posted yet.", "problems": "No problems. Everything is working."}
+                              .get(self.filter, "Nothing here yet. Start posting on the Ad poster tab."))
             self.empty.place(relx=0.5, rely=0.5, anchor="center")
+        self.detail_title.config(text="")
+        self.detail.config(text=self.HINT)
+
+    def _show_details(self) -> None:
+        selected = self.tree.selection()
+        row = self.rows.get(selected[0]) if selected else None
+        if row is None:
+            return
+        event, info = row
+        self.detail_title.config(text=info.title)
+        self.detail.config(text=events.details(event, info))
 
 
 class HelpPage(Page):
@@ -1279,26 +1322,34 @@ class App(tk.Tk):
             cfg, cookie, catalog = prepare(self.cfg_path, session, stop_event)
             self.events.put(("catalog", catalog))
             if not stop_event.is_set():
-                self.poster = Poster(cfg, self.cfg_path, cookie, catalog, stop_event, session)
+                self.poster = Poster(cfg, self.cfg_path, cookie, catalog, stop_event, session,
+                                     on_event=lambda event: self.events.put(("history", event)))
                 self.history = self.poster.history
                 self.poster.run()
         except AuthError as e:
-            log.error("Rolimons rejected your cookie: %s", e)
-            self.events.put(("error", f"Rolimons rejected your cookie (\"{e}\").\n\n"
-                                      "It may have been reset by logging out or re-verifying on Rolimons. "
-                                      "Open rolimons.com, copy the current _RoliVerification value, "
-                                      "click \"Set cookie\", and start again."))
+            log.error("Rolimons rejected your cookie: %s", e)  # the poster recorded why in History
+            info = events.describe({"code": events.STOPPED_AUTH})
+            self.events.put(("error", f"{info.body}\n\nOpen rolimons.com, copy the current _RoliVerification "
+                                      "value, click \"Set cookie\", and start again."))
         except StartupError as e:
             log.error("%s", e)
+            self._record_stop(events.STOPPED_ERROR, {"reason": str(e)})
             self.events.put(("error", str(e)))
         except Exception:
             log.exception("Unexpected error")
+            self._record_stop(events.STOPPED_ERROR,
+                              {"reason": "An unexpected error occurred (details are in the Activity log)."})
             self.events.put(("error", "Something went wrong. See the Activity log for details."))
         finally:
             if self.poster is not None:
                 self.inventory = self.poster.inventory or self.inventory
             self.poster = None
+            if self._user_stopped:
+                self._record_stop(events.STOPPED_BY_USER)
             self.events.put(("stopped", None))
+
+    def _record_stop(self, code: str, params: dict | None = None) -> None:
+        self.events.put(("history", PostHistory(state_path()).record_event(code, params)))
 
     def _set_running(self, running: bool) -> None:
         self.btn_run.config(text="Stop" if running else "Start posting", state="normal",
@@ -1409,6 +1460,9 @@ class App(tk.Tk):
             elif kind == "error":
                 self.notify(None, "Rolimons Ad Poster", payload.split("\n")[0])
                 messagebox.showerror(APP_NAME, payload)
+            elif kind == "history":  # no notification on the PC; the History tab just stays up to date
+                if self.current_tab == "history":
+                    self.pages["history"].refresh()
             elif kind == "catalog":
                 first = self.catalog is None
                 if payload is not None:

@@ -288,9 +288,58 @@ class SelfTest:
         self.record("background service starts and reports", ok)
         yield from self.wait_until(lambda: not runner.read_status(self.home).get("running"), 60)
         status = runner.read_status(self.home)
-        self.record("Rolimons' rejection of the fake cookie is reported",
-                    not status.get("running") and "cookie" in (status.get("error") or "").lower(),
-                    status.get("error") or "")
+        self.record("Rolimons' rejection of the fake cookie is reported in plain English",
+                    not status.get("running") and "signed out of rolimons" in (status.get("error_title") or "").lower()
+                    and "sign in to rolimons again" in (status.get("error") or "").lower(),
+                    f"{status.get('error_title')}: {status.get('error')}")
         yield 3
         self.shot("6-result")
         self.dismiss_popups()
+
+        # The stop is in History as a friendly entry (Problems filter), with what to do in its details.
+        app.switch_tab("history")
+        yield 1
+        history = app.sm.get_screen("history")
+        history.set_filter("problems")
+        yield 1
+        rows = [w for w in history.ids.events.children if hasattr(w, "subtitle")]
+        titles = [r.title for r in rows]
+        self.record("history shows the stop in plain English",
+                    any("signed out of Rolimons" in t for t in titles), "; ".join(titles[:5]))
+        self.shot("7-history")
+        if rows:
+            stop_row = next((r for r in reversed(rows) if "signed out" in r.title), rows[-1])
+            stop_row.dispatch("on_release")
+            yield 1
+            notices = [w for w in Window.children if isinstance(w, ModalView)]
+            self.record("tapping an entry explains what to do",
+                        any("What to do:" in getattr(n, "message", "") for n in notices))
+            self.shot("8-history-details")
+            self.dismiss_popups()
+        history.set_filter("all")
+        app.switch_tab("home")
+        yield 1
+
+        if droid.IS_ANDROID:
+            yield from self.notification_steps()
+
+    def notification_steps(self):
+        """Android only: the stop became a phone notification, and new trades notify ("New trade from X")."""
+        ok = yield from self.wait_until(
+            lambda: any("signed out of Rolimons" in t for t in droid.active_notification_titles()), 15)
+        self.record("posting stop sends a phone notification", ok, "; ".join(droid.active_notification_titles()))
+        notifier = droid.trade_notifier()
+        if not notifier.isSeeded():  # the first check only remembers the trades already there
+            notifier.report('[{"id": "1000001", "name": "Seeded"}]')
+        before = int(droid.autoclass_notifier().notifiedCount)
+        notifier.report('[{"id": "1000002", "name": "SelfTestUser"}, {"id": "1000001", "name": "Seeded"}]')
+        ok = yield from self.wait_until(
+            lambda: "New trade from SelfTestUser" in droid.active_notification_titles(), 10)
+        self.record("a new Roblox trade sends a notification", ok and droid.autoclass_notifier().notifiedCount == before + 1,
+                    "; ".join(droid.active_notification_titles()))
+        notifier.report('[{"id": "1000002", "name": "SelfTestUser"}]')
+        yield 1
+        self.record("the same trade doesn't notify twice", droid.autoclass_notifier().notifiedCount == before + 1)
+        notifier.report('[{"id": "../etc", "name": "<b>x</b>"}]')
+        yield 1
+        self.record("malformed trade reports are ignored", droid.autoclass_notifier().notifiedCount == before + 1)

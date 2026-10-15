@@ -34,6 +34,7 @@ from kivy.utils import get_color_from_hex  # noqa: E402
 
 import runner  # noqa: E402
 from roliposter import __version__  # noqa: E402
+from roliposter import events as ev  # noqa: E402
 from roliposter import palette as P  # noqa: E402
 from roliposter.config import (MAX_OFFER_ITEMS, MAX_REQUEST_SLOTS, VALID_TAGS, Ad, Config,  # noqa: E402
                                ConfigError, load_config, save_config, validate_config)
@@ -47,7 +48,7 @@ from roliposter.poster import fmt_duration  # noqa: E402
 from roliposter.state import PostHistory  # noqa: E402
 from roliposter.thumbs import ThumbnailCache  # noqa: E402
 from roliposter.updates import check_for_update  # noqa: E402
-from roliposter.trades_viewer import TRADES_URL, VIEW_ONLY_JS  # noqa: E402
+from roliposter.trades_viewer import TRADE_POLL_JS, TRADES_URL, VIEW_ONLY_JS  # noqa: E402
 from roliposter.values import evaluate_ad  # noqa: E402
 
 COOKIE_WARN_DAYS = 3
@@ -65,13 +66,18 @@ Tap "Start posting". One ad goes out about every 15 minutes (Rolimons' cooldown)
 [b]Received trades[/b]
 The Trades tab shows Roblox's own trades page. Sign in to Roblox there the first time. It is view-only: accepting, declining, countering and sending are blocked inside the app. Respond on roblox.com or in the Roblox app. Settings > "Sign out of Roblox" signs you out.
 
+[b]Notifications[/b]
+You get a notification when posting pauses (daily ad limit, outside your posting hours, no internet), when it resumes, and if it stops. Tap it to see why in History. Once you're signed in to Roblox in the Trades tab, you also get "New trade from ..." when someone sends you a trade (Settings > "Notify me about new Roblox trades"). Android checks for new trades every few minutes while the app is open or recently used.
+
+[b]History[/b]
+Every post, pause and problem in plain English. Use Problems to see only what went wrong, and tap an entry to see what to do about it.
+
 [b]Safety[/b]
 This app never asks for your Roblox password or .ROBLOSECURITY cookie, and never reads your Roblox sign-in. Anyone who asks you to paste those is trying to steal your account.
 
 Run posting on one device at a time: two devices posting for the same account hit each other's cooldown.
 """
 TABS = ("home", "trades", "history", "settings", "help")
-RESULT_COLORS = {"SUCCESS": P.OK, "AUTH_ERROR": P.BAD, "REJECTED": P.BAD}
 
 
 def asset(relative: str) -> Path:
@@ -205,21 +211,59 @@ class CookieScreen(Screen):
             app.go_back()
 
 
+SEVERITY_COLORS = {ev.OK: P.OK, ev.INFO: P.ACCENT, ev.WARN: P.WARN, ev.ERROR: P.BAD}
+
+
+class EventRow(ButtonBehavior, BoxLayout):
+    """One History entry: coloured marker, plain-English title, time and a short explanation."""
+    title = StringProperty("")
+    subtitle = StringProperty("")
+    marker = ColorProperty()
+
+
 class HistoryScreen(Screen):
+    """Plain-English history (see roliposter/events.py). Tap an entry for what to do and the raw reply."""
+    filter = StringProperty("all")
+    show_log = BooleanProperty(False)
+
     def on_pre_enter(self):
-        box = self.ids.attempts
+        self.refresh()
+
+    def set_filter(self, flt: str):
+        self.filter = flt
+        self.refresh()
+
+    def refresh(self):
+        app = App.get_running_app()
+        history = PostHistory(state_path())
+        timeline = history.timeline()
+        self.ids.summary.text = ev.summary(timeline, history.count_24h(), app.cfg.max_ads_per_24h)
+        for key, _label in ev.FILTERS:
+            self.ids[f"filter_{key}"].selected = key == self.filter
+        box = self.ids.events
         box.clear_widgets()
-        attempts = list(reversed(PostHistory(state_path()).attempts))[:100]
-        posted = sum(1 for a in attempts if a["result"] == "SUCCESS")
-        self.ids.summary.text = (f"{len(attempts)} recent attempts  ·  {posted} posted" if attempts
-                                 else "Nothing posted yet.")
-        for a in attempts:
-            color = RESULT_COLORS.get(a["result"], P.WARN)
-            when = time.strftime("%d %b %H:%M", time.localtime(a["t"]))
-            result = a["result"].replace("_", " ").title()
-            row = ItemRow(name=f"{a['ad']}", value=f"{when}  ·  [color={color}]{result}[/color]  {a.get('message', '')[:60]}")
-            row.height = 52
-            box.add_widget(row)
+        groups = ev.grouped(timeline, self.filter)
+        if not groups:
+            box.add_widget(Factory.Muted(text={"posted": "No ads posted yet.",
+                                               "problems": "No problems. Everything is working."}
+                                         .get(self.filter, "Nothing here yet. Start posting on the Ads tab.")))
+        for day, entries in groups:
+            box.add_widget(Factory.FieldLabel(text=day.upper()))
+            for event, info in entries:
+                row = EventRow(title=info.title, subtitle=f"{ev.time_label(event['t'])}  ·  {info.body}",
+                               marker=get_color_from_hex(SEVERITY_COLORS.get(info.severity, P.MUTED)))
+                row.bind(on_release=lambda _r, e=event, i=info: app.notice(i.title, ev.details(e, i)))
+                box.add_widget(row)
+        self.load_log()
+
+    def toggle_log(self):
+        self.show_log = not self.show_log
+        self.load_log()
+
+    def load_log(self):
+        if not self.show_log:
+            self.ids.activity.text = ""
+            return
         try:
             lines = (log_dir() / "poster.log").read_text(encoding="utf-8").splitlines()[-60:]
         except OSError:
@@ -244,6 +288,7 @@ class SettingsScreen(Screen):
         ids.skip_overpay.active = c.value_mode.skip_overpaying_ads
         ids.smart_pick.active = c.value_mode.strategy == "pick"
         ids.notify_on.active = c.app.notifications
+        ids.trade_notify_on.active = c.app.trade_notifications
         ids.updates_on.active = c.app.check_updates
         self.refresh_battery()
 
@@ -292,6 +337,7 @@ class SettingsScreen(Screen):
         c.value_mode.skip_overpaying_ads = ids.skip_overpay.active
         c.value_mode.strategy = "pick" if ids.smart_pick.active else "warn"
         c.app.notifications = ids.notify_on.active
+        c.app.trade_notifications = ids.trade_notify_on.active
         c.app.check_updates = ids.updates_on.active
         problems = [e for e in validate_config(c) if not e.startswith(("No ads", "All ads", "roblox_user_id"))
                     and not e.startswith("Ad '")]
@@ -299,6 +345,7 @@ class SettingsScreen(Screen):
             return app.notice("Check your settings", "\n".join(problems))
         app.cfg = c
         app.persist()
+        app.apply_trade_notifications()
         app.toast("Settings saved")
 
 
@@ -563,8 +610,12 @@ class RoliApp(App):
         if self.cfg.app.check_updates:
             threading.Thread(target=self._check_updates, daemon=True).start()
         Clock.schedule_once(lambda *_: self._first_run_checks(), 1.0)
-        self.trades_view = (droid.TradesView(TRADES_URL, VIEW_ONLY_JS) if droid.TradesView.available
-                            else None)
+        self.trades_view = (droid.TradesView(TRADES_URL, VIEW_ONLY_JS + TRADE_POLL_JS)
+                            if droid.TradesView.available else None)
+        Clock.schedule_once(lambda *_: self.apply_trade_notifications(), 2.5)  # after the insets are known
+        if droid.IS_ANDROID:
+            from android import activity  # type: ignore
+            activity.bind(on_new_intent=self._on_new_intent)
         self.nav = Factory.NavBar()
         root = BoxLayout(orientation="vertical")
         root.add_widget(self.sm)
@@ -669,6 +720,19 @@ class RoliApp(App):
         if self.trades_view:
             self.trades_view.hide()
 
+    def apply_trade_notifications(self):
+        """"New trade from X" needs the (hidden) trades page running, so it's loaded at startup."""
+        enabled = self.cfg.app.notifications and self.cfg.app.trade_notifications
+        droid.set_trade_notifications(enabled)
+        if enabled and self.trades_view:
+            self.trades_view.preload(*self._trades_area())
+
+    def _on_new_intent(self, intent):
+        """A notification was tapped while the app was already open."""
+        tab = droid.opened_tab(intent)
+        if tab:
+            Clock.schedule_once(lambda *_: self.switch_tab(tab), 0)
+
     def notice(self, title: str, message: str, buttons=(("OK", None),)):
         Notice(title, message, buttons).open()
 
@@ -703,7 +767,7 @@ class RoliApp(App):
                     and self._start_requested_at:
                 self._last_error_seen = status.get("updated")
                 self._start_requested_at = 0.0
-                self.notice("Posting stopped", error)
+                self.notice(status.get("error_title") or "Posting stopped", error)
         if self._stop_requested_at and now - self._stop_requested_at > 12 and status.get("running"):
             self.engine.stop_service()  # didn't respond to the stop command
             self._stop_requested_at = 0.0
@@ -803,6 +867,9 @@ class RoliApp(App):
             if days < COOKIE_WARN_DAYS:
                 droid.notify("Rolimons cookie expiring soon",
                              f"Your cookie expires in {max(1, round(days * 24))} hours. Sign in again to keep posting.")
+        tab = droid.opened_tab()  # opened by tapping one of our notifications
+        if tab:
+            self.switch_tab(tab)
         screen = droid.launch_extra("screen")
         if screen == "edit" and self.cfg.ads:
             self.edit_ad(0)

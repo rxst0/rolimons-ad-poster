@@ -27,6 +27,7 @@ def watch_wanted() -> bool:
 
 def main() -> None:
     service = PythonService.mService
+    droid.prime_java()  # the heartbeat thread below uses the app's Java classes
     home = droid.data_home()
     if not runner.wants_running(home) and not watch_wanted():
         # Android restarted a sticky service the user had already stopped.

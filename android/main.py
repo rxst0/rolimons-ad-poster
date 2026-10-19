@@ -296,6 +296,13 @@ class TradesScreen(Screen):
         threading.Thread(target=self._fetch, args=(token, self.kind, self._cursor), daemon=True).start()
 
     def _fetch(self, token, kind: str, cursor: str):
+        try:
+            self._fetch_all(token, kind, cursor)
+        except Exception as e:  # never leave the list stuck on "Loading..."
+            log.exception("Loading trades failed")
+            self._failed(token, -4, f"{type(e).__name__}: {e}"[:200])
+
+    def _fetch_all(self, token, kind: str, cursor: str):
         status, body = droid.RobloxDirect.fetch("list", kind, cursor)
         if status != 200:
             return self._failed(token, status)
@@ -325,10 +332,14 @@ class TradesScreen(Screen):
             self._detailed(token, trade.id, details)
 
     @mainthread
-    def _failed(self, token, status: int):
+    def _failed(self, token, status: int, detail: str = ""):
         if self._token is not token:
             return
-        self.status_text = LIST_ERRORS.get(status, f"Roblox replied with an error ({status}). Tap Reload to try again.")
+        if detail:
+            self.status_text = f"Couldn't load your trades. Tap Reload to try again.\n\n({detail})"
+        else:
+            self.status_text = LIST_ERRORS.get(status, f"Roblox replied with an error ({status}). "
+                                                       "Tap Reload to try again.")
         self._loaded_at = 0.0
         if status in (0, 401):
             droid.RobloxDirect.clear()  # shows the Roblox page to sign in again
@@ -802,6 +813,7 @@ class RoliApp(App):
         Window.softinput_mode = "below_target"
         Window.bind(on_keyboard=self._on_key)
         setup_logging(log_dir())
+        droid.prime_java()  # worker threads (the trades list) use the app's Java classes
         load_env_file(env_path())
         self.cfg = self._load_cfg()
         self.catalog: ItemCatalog | None = None

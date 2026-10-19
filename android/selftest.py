@@ -6,6 +6,7 @@ Results go to <home>/selftest.json, screenshots to <home>/selftest/, and "SELFTE
 """
 import base64
 import json
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -157,6 +158,19 @@ class SelfTest:
                    (("list", "../1/decline"), ("trade", "1/accept"), ("send", "1"))]
         self.record("direct trade reads refuse anything but their fixed requests", refused == [-2, -2, -2],
                     str(refused))
+        # The trades list calls Java from a worker thread, which can't look up the app's classes itself.
+        threaded = {}
+
+        def from_thread():
+            try:
+                threaded["v"] = droid.RobloxDirect.fetch("trade", "1/accept")[0]
+            except Exception as e:
+                threaded["v"] = f"{type(e).__name__}: {e}"
+        worker = threading.Thread(target=from_thread)
+        worker.start()
+        worker.join(15)
+        self.record("direct trade reads work from a background thread", threaded.get("v") == -2,
+                    str(threaded.get("v")))
         app.switch_tab("home")
         yield 1
 

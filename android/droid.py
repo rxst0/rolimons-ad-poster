@@ -448,11 +448,46 @@ def sign_out_web() -> None:
 
 
 # ---- "Read my trades directly" ------------------------------------------------------
+# The app's own Java classes can only be looked up from the main thread: a Python worker thread uses
+# Android's system class loader, which doesn't know them. So they're looked up once by prime_java() on
+# the main thread and reused from any thread.
+APP_CLASSES = ("org.roliposter.RobloxSession", "org.roliposter.RobloxApi", "org.roliposter.TradeWatcher",
+               "org.roliposter.ForegroundText")
+_classes: dict = {}
+_app_context = None
+
+
+def prime_java() -> None:
+    """Call on the main thread (app start, service start) before any worker thread uses the classes below."""
+    global _app_context
+    if not IS_ANDROID:
+        return
+    from jnius import autoclass  # type: ignore
+    for name in APP_CLASSES:
+        if name not in _classes:
+            _classes[name] = autoclass(name)
+    if _app_context is None:
+        _app_context = _context().getApplicationContext()
+
+
+def _jclass(name: str):
+    if name not in _classes:
+        prime_java()  # only works on the main thread; worker threads rely on an earlier call
+    return _classes[name]
+
+
+def _app_ctx():
+    if _app_context is None:
+        prime_java()
+    return _app_context
+
+
 class RobloxDirect:
     """Read-only Roblox trade requests made in Java with a stored, encrypted copy of the Roblox sign-in
     (org.roliposter.RobloxSession / RobloxApi). Python only ever sees the replies, never the cookie.
 
-    fetch() blocks: call it from a worker thread (pyjnius detaches Python threads from Java when they end).
+    fetch() blocks: call it from a worker thread (pyjnius detaches Python threads from Java when they end),
+    after prime_java() has run on the main thread.
     """
 
     available = IS_ANDROID
@@ -462,35 +497,32 @@ class RobloxDirect:
         """On: copy the sign-in from the trades page after it loads. Off: delete the copy (cookieless)."""
         if not IS_ANDROID:
             return
-        from jnius import autoclass  # type: ignore
-        session = autoclass("org.roliposter.RobloxSession")
+        session = _jclass("org.roliposter.RobloxSession")
         session.setCaptureEnabled(bool(enabled))
         if enabled:
             RobloxDirect.capture()
         else:
-            session.clear(_context())
+            session.clear(_app_ctx())
 
     @staticmethod
     def capture() -> None:
         """Copies the trades page's current Roblox sign-in (and applies any cookie Roblox rotated)."""
         if not IS_ANDROID:
             return
-        from jnius import autoclass  # type: ignore
         from android.runnable import run_on_ui_thread  # type: ignore
-        run_on_ui_thread(lambda: autoclass("org.roliposter.RobloxSession").captureFromWebView(_context()))()
+        session, ctx = _jclass("org.roliposter.RobloxSession"), _app_ctx()
+        run_on_ui_thread(lambda: session.captureFromWebView(ctx))()
 
     @staticmethod
     def signed_in() -> bool:
         if not IS_ANDROID:
             return False
-        from jnius import autoclass  # type: ignore
-        return bool(autoclass("org.roliposter.RobloxSession").isSignedIn(_context()))
+        return bool(_jclass("org.roliposter.RobloxSession").isSignedIn(_app_ctx()))
 
     @staticmethod
     def clear() -> None:
         if IS_ANDROID:
-            from jnius import autoclass  # type: ignore
-            autoclass("org.roliposter.RobloxSession").clear(_context())
+            _jclass("org.roliposter.RobloxSession").clear(_app_ctx())
 
     @staticmethod
     def fetch(kind: str, arg: str, cursor: str = "") -> tuple[int, str]:
@@ -498,8 +530,7 @@ class RobloxDirect:
         if not IS_ANDROID:
             return 0, ""
         import json
-        from jnius import autoclass  # type: ignore
-        reply = json.loads(str(autoclass("org.roliposter.RobloxApi").fetch(_context(), kind, arg, cursor)))
+        reply = json.loads(str(_jclass("org.roliposter.RobloxApi").fetch(_app_ctx(), kind, arg, cursor)))
         return int(reply.get("status", -1)), str(reply.get("body", ""))
 
 
@@ -512,10 +543,9 @@ def trade_watch_wanted(cfg) -> bool:
 def start_trade_watcher(on: bool, interval_seconds: int = 90) -> None:
     if not IS_ANDROID:
         return
-    from jnius import autoclass  # type: ignore
-    watcher = autoclass("org.roliposter.TradeWatcher")
+    watcher = _jclass("org.roliposter.TradeWatcher")
     if on:
-        watcher.start(_context(), interval_seconds)
+        watcher.start(_app_ctx(), interval_seconds)
     else:
         watcher.stop()
 
@@ -523,8 +553,7 @@ def start_trade_watcher(on: bool, interval_seconds: int = 90) -> None:
 def set_service_text(text: str) -> None:
     """The background service's status-bar text (posting vs. only checking for trades)."""
     if IS_ANDROID:
-        from jnius import autoclass  # type: ignore
-        autoclass("org.roliposter.ForegroundText").update(_context(), text)
+        _jclass("org.roliposter.ForegroundText").update(_app_ctx(), text)
 
 
 # ---- Rolimons sign-in (WebView) -----------------------------------------------------

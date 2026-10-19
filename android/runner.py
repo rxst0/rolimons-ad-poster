@@ -14,6 +14,7 @@ from pathlib import Path
 STATUS_FILE = "status.json"
 CONTROL_FILE = "control.json"
 WANT_RUNNING_FILE = "want_running"  # present while the user wants posting on; survives service restarts
+SERVICE_ALIVE_FILE = "service_alive"  # touched every few seconds while the background service runs
 STALE_SECONDS = 15
 
 log = logging.getLogger("roliposter.runner")
@@ -61,6 +62,22 @@ def set_want_running(home: Path, on: bool) -> None:
 
 def wants_running(home: Path) -> bool:
     return (home / WANT_RUNNING_FILE).exists()
+
+
+def mark_service_alive(home: Path, alive: bool = True) -> None:
+    path = home / SERVICE_ALIVE_FILE
+    if alive:
+        path.write_text(str(time.time()), encoding="utf-8")
+    else:
+        path.unlink(missing_ok=True)
+
+
+def service_alive(home: Path) -> bool:
+    """True while the background service (posting and/or checking for trades) is running."""
+    try:
+        return time.time() - float((home / SERVICE_ALIVE_FILE).read_text(encoding="utf-8")) < STALE_SECONDS
+    except (OSError, ValueError):
+        return False
 
 
 def run(home: Path, on_event=None) -> dict:

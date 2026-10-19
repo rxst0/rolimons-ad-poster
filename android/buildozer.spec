@@ -28,7 +28,8 @@ fullscreen = 0
 # daily time limit (unlike dataSync, which Android 15 caps at 6 hours a day).
 services = Poster:service.py:foreground:sticky:foregroundServiceType=specialUse
 
-# Java helper for the view-only Received trades tab (android/java/org/roliposter/).
+# Java helpers for the view-only trades tab, "Read my trades directly" and trade notifications
+# (android/java/org/roliposter/).
 android.add_src = java
 # One app window: tapping a notification switches tab in the open app instead of starting another copy.
 android.manifest.launch_mode = singleTask

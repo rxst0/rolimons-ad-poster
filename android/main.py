@@ -1,5 +1,6 @@
 """Rolimons Ad Poster - Android app (Kivy). Also runs on a PC for previewing: python android/main.py"""
 import copy
+import logging
 import os
 import sys
 import threading
@@ -23,6 +24,7 @@ from kivy.core.window import Window  # noqa: E402
 from kivy.factory import Factory  # noqa: E402
 from kivy.graphics import Color, Rectangle  # noqa: E402
 from kivy.lang import Builder  # noqa: E402
+from kivy.metrics import dp  # noqa: E402
 from kivy.properties import BooleanProperty, ColorProperty, NumericProperty, StringProperty  # noqa: E402
 from kivy.uix.behaviors import ButtonBehavior  # noqa: E402
 from kivy.uix.boxlayout import BoxLayout  # noqa: E402
@@ -45,12 +47,14 @@ from roliposter.items import ItemCatalog, fetch_catalog  # noqa: E402
 from roliposter.logsetup import REDACTOR, setup_logging  # noqa: E402
 from roliposter.paths import cache_dir, config_path, env_path, log_dir, state_path  # noqa: E402
 from roliposter.poster import fmt_duration  # noqa: E402
+from roliposter.roblox_trades import KINDS, KIND_LABELS, ago, parse_details, parse_list, verdict  # noqa: E402
 from roliposter.state import PostHistory  # noqa: E402
 from roliposter.thumbs import ThumbnailCache  # noqa: E402
 from roliposter.updates import check_for_update  # noqa: E402
 from roliposter.trades_viewer import TRADE_POLL_JS, TRADES_URL, VIEW_ONLY_JS  # noqa: E402
 from roliposter.values import evaluate_ad  # noqa: E402
 
+log = logging.getLogger("roliposter.app")
 COOKIE_WARN_DAYS = 3
 HELP_TEXT = """[b]Getting started[/b]
 
@@ -63,21 +67,28 @@ Tap "+ New ad", search items by name, tap Offer or Want, pick tags, and save. Ad
 [b]3. Start posting[/b]
 Tap "Start posting". One ad goes out about every 15 minutes (Rolimons' cooldown) with a small random delay. A notification stays while it posts, even with the screen off. In Settings, tap "Allow running in the background" so Android doesn't pause it.
 
-[b]Received trades[/b]
-The Trades tab shows Roblox's own trades page. Sign in to Roblox there the first time. It is view-only: accepting, declining, countering and sending are blocked inside the app. Respond on roblox.com or in the Roblox app. Settings > "Sign out of Roblox" signs you out.
+[b]Trades[/b]
+The Trades tab shows Roblox's trades page. Sign in to Roblox there the first time. It is view-only: accepting, declining, countering and sending are blocked inside the app. Respond on roblox.com or in the Roblox app. Settings > "Sign out of Roblox" signs you out.
+
+[b]Read my trades directly (optional)[/b]
+Turn this on in Settings to see your trades as a list in the app (inbound, outbound, completed, inactive) with item pictures and Rolimons values, and to get new-trade alerts even when the app is closed. To do this, the app keeps an encrypted copy of your Roblox sign-in (.ROBLOSECURITY) on this phone and uses it only to read your trades. It's never sent anywhere except Roblox, and it can't be used to accept, decline or send trades. Turning the option off deletes the copy.
 
 [b]Notifications[/b]
-You get a notification when posting pauses (daily ad limit, outside your posting hours, no internet), when it resumes, and if it stops. Tap it to see why in History. Once you're signed in to Roblox in the Trades tab, you also get "New trade from ..." when someone sends you a trade (Settings > "Notify me about new Roblox trades"). Android checks for new trades every few minutes while the app is open or recently used.
+You get a notification when posting pauses (daily ad limit, outside your posting hours, no internet), when it resumes, and if it stops. Tap it to see why in History. Once you're signed in to Roblox in the Trades tab, you also get "New trade from ..." when someone sends you a trade (Settings > "Notify me about new Roblox trades"). Without "Read my trades directly", Android only checks while the app is open or recently used. With it, the app checks every couple of minutes in the background and shows "Checking for new Roblox trades" in your status bar.
 
 [b]History[/b]
 Every post, pause and problem in plain English. Use Problems to see only what went wrong, and tap an entry to see what to do about it.
 
 [b]Safety[/b]
-This app never asks for your Roblox password or .ROBLOSECURITY cookie, and never reads your Roblox sign-in. Anyone who asks you to paste those is trying to steal your account.
+This app never asks you to type or paste your Roblox password or .ROBLOSECURITY cookie. Anyone who asks you to paste those is trying to steal your account. Your Roblox sign-in is only read if you turn on "Read my trades directly", and then only to read your trades.
 
 Run posting on one device at a time: two devices posting for the same account hit each other's cooldown.
 """
 TABS = ("home", "trades", "history", "settings", "help")
+DIRECT_TRADES_TEXT = ("Your trades now show as a list in the Trades tab, and new-trade alerts work with the app "
+                      "closed.\n\nThe app keeps an encrypted copy of your Roblox sign-in on this phone and uses it "
+                      "only to read your trades. Turn this off any time to delete the copy.\n\n"
+                      "If you aren't signed in to Roblox yet, open the Trades tab and sign in there.")
 
 
 def asset(relative: str) -> Path:
@@ -175,26 +186,228 @@ class NavButton(ButtonBehavior, Label):
     tab = StringProperty("")
 
 
+LIST_ERRORS = {
+    0: "Sign in to Roblox on the Roblox page first.",
+    401: "Roblox signed you out. Sign in again on the Roblox page.",
+    429: "Roblox is busy. Tap Reload in a minute.",
+    -1: "Couldn't reach Roblox. Check your internet connection.",
+}
+
+
+class TradeCard(ButtonBehavior, BoxLayout):
+    """One trade in the app's own trades list: who with, item pictures on each side, and values."""
+    partner = StringProperty("")
+    when = StringProperty("")
+    summary = StringProperty("Loading items...")
+    tone = StringProperty("loading")
+    note = StringProperty("")
+
+    def __init__(self, trade, **kw):
+        super().__init__(partner=trade.partner_name, when=ago(trade.created), **kw)
+        self.trade = trade
+        self.details = None
+
+    def show(self, details) -> None:
+        app = App.get_running_app()
+        self.details = details
+        self.tone, self.summary = verdict(details)
+        self.note = "Projected item in what you get" if details.has_projected else ""
+        for box, side in ((self.ids.give_box, details.give), (self.ids.get_box, details.get)):
+            box.clear_widgets()
+            for item in side.items:
+                box.add_widget(Factory.TradeThumb(source=app.thumb_source(item.asset_id)))
+            if side.robux:
+                box.add_widget(Factory.Muted(text=f"+R$ {side.robux:,}", size_hint_x=None, width=dp(80),
+                                             height=dp(34)))
+            if not side.items and not side.robux:
+                box.add_widget(Factory.Muted(text="Nothing", height=dp(34)))
+
+
 class TradesScreen(Screen):
+    """Roblox's trades page (WebView), or with "Read my trades directly" the app's own list."""
     placeholder = StringProperty("Loading Roblox..." if droid.TradesView.available else
                                  "The Received trades tab works in the Android app.\n\n"
                                  "It shows Roblox's own trades page, view-only.")
+    direct = BooleanProperty(False)   # option on and signed in: the list is available
+    page = BooleanProperty(False)     # showing the Roblox page instead of the list
+    kind = StringProperty("inbound")
+    status_text = StringProperty("")
+    more = BooleanProperty(False)
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._token = None
+        self._cursor = ""
+        self._loaded_at = 0.0
+        self._raw_details: dict[int, str] = {}  # trade ID -> Roblox's reply (details never change)
+
+    @property
+    def native(self) -> bool:
+        return self.direct and not self.page
 
     def on_enter(self):
-        App.get_running_app().show_trades_view()
+        Clock.schedule_once(lambda *_: self.apply_view(), 0)
 
     def on_pre_leave(self):
         App.get_running_app().hide_trades_view()
 
-    def reload(self):
-        view = App.get_running_app().trades_view
-        if view:
-            view.reload()
+    def apply_view(self):
+        """Shows the WebView or the list, loading the list if it's old."""
+        app = App.get_running_app()
+        if self.manager is None or self.manager.current != "trades":
+            return
+        if self.native:
+            app.hide_trades_view()
+            if time.time() - self._loaded_at > 60:
+                self.load()
+        else:
+            if app.cfg.app.direct_trades:
+                droid.RobloxDirect.capture()  # hands the page any cookie Roblox rotated in the background
+            app.show_trades_view()
 
-    def inbound(self):
-        view = App.get_running_app().trades_view
-        if view:
-            view.go_home()
+    def first_button(self):
+        if self.direct:
+            self.page = not self.page
+            self.apply_view()
+        elif App.get_running_app().trades_view:
+            App.get_running_app().trades_view.go_home()
+
+    def reload(self):
+        if self.native:
+            self.load()
+        elif App.get_running_app().trades_view:
+            App.get_running_app().trades_view.reload()
+
+    def set_kind(self, kind: str):
+        if kind in KINDS:
+            self.kind = kind
+            self.load()
+
+    def load(self, more: bool = False):
+        token = object()
+        self._token = token
+        self._loaded_at = time.time()
+        if not more:
+            self._cursor = ""
+            self.ids.trades_box.clear_widgets()
+            self.ids.trades_scroll.scroll_y = 1
+        self.status_text = "Loading..."
+        self.more = False
+        threading.Thread(target=self._fetch, args=(token, self.kind, self._cursor), daemon=True).start()
+
+    def _fetch(self, token, kind: str, cursor: str):
+        status, body = droid.RobloxDirect.fetch("list", kind, cursor)
+        if status != 200:
+            return self._failed(token, status)
+        try:
+            trades, next_cursor = parse_list(body)
+        except (ValueError, AttributeError, TypeError):
+            return self._failed(token, -3)
+        self._listed(token, trades, next_cursor)
+        for trade in trades:
+            if self._token is not token:
+                return
+            raw = self._raw_details.get(trade.id)
+            if raw is None:
+                status, raw = droid.RobloxDirect.fetch("trade", str(trade.id))
+                if status == 429:  # Roblox limits how fast trades can be read
+                    time.sleep(6)
+                    status, raw = droid.RobloxDirect.fetch("trade", str(trade.id))
+                if status != 200:
+                    self._no_details(token, trade.id)
+                    continue
+                self._raw_details[trade.id] = raw
+            try:
+                details = parse_details(raw, trade.partner_id, App.get_running_app().catalog)
+            except (ValueError, AttributeError, TypeError):
+                self._no_details(token, trade.id)
+                continue
+            self._detailed(token, trade.id, details)
+
+    @mainthread
+    def _failed(self, token, status: int):
+        if self._token is not token:
+            return
+        self.status_text = LIST_ERRORS.get(status, f"Roblox replied with an error ({status}). Tap Reload to try again.")
+        self._loaded_at = 0.0
+        if status in (0, 401):
+            droid.RobloxDirect.clear()  # shows the Roblox page to sign in again
+            App.get_running_app().sync_direct_trades()
+
+    @mainthread
+    def _listed(self, token, trades, next_cursor: str):
+        if self._token is not token:
+            return
+        box = self.ids.trades_box
+        for trade in trades:
+            card = TradeCard(trade)
+            card.bind(on_release=lambda c: self.open(c))
+            box.add_widget(card)
+        self._cursor = next_cursor
+        self.more = bool(next_cursor)
+        self.status_text = "" if box.children else f"No {KIND_LABELS[self.kind].lower()} trades."
+
+    def _card(self, trade_id: int):
+        return next((c for c in self.ids.trades_box.children if c.trade.id == trade_id), None)
+
+    @mainthread
+    def _detailed(self, token, trade_id: int, details):
+        card = self._card(trade_id) if self._token is token else None
+        if card:
+            card.show(details)
+            App.get_running_app().request_thumbs([i.asset_id for i in details.give.items + details.get.items])
+
+    @mainthread
+    def _no_details(self, token, trade_id: int):
+        card = self._card(trade_id) if self._token is token else None
+        if card:
+            card.summary, card.tone = "Couldn't load the items. Tap Reload to try again.", "loading"
+
+    def refresh_thumbs(self):
+        for card in self.ids.trades_box.children:
+            if card.details:
+                card.show(card.details)
+
+    def open(self, card):
+        if card.details is None:
+            return
+        app = App.get_running_app()
+        app.sm.get_screen("trade").load(card.trade, card.details)
+        app.show("trade")
+
+
+class TradeScreen(Screen):
+    """One trade from the app's trades list: every item on both sides, with values. View only."""
+    title = StringProperty("Trade")
+    summary = StringProperty("")
+    tone = StringProperty("even")
+    note = StringProperty("")
+
+    def load(self, trade, details):
+        self.trade, self.details = trade, details
+        self.title = f"Trade with {trade.partner_name}"
+        self.refresh()
+        self.ids.scroll.scroll_y = 1
+
+    def refresh(self):
+        app = App.get_running_app()
+        details = self.details
+        self.tone, self.summary = verdict(details)
+        when = ago(self.trade.created)
+        kind = KIND_LABELS.get(app.sm.get_screen("trades").kind, "")
+        self.note = f"{kind} trade, created {when}." if when else f"{kind} trade."
+        for box, side, robux_note in ((self.ids.give_box, details.give, ""),
+                                      (self.ids.get_box, details.get, "  (you get 70% after Roblox's fee)")):
+            box.clear_widgets()
+            for item in side.items:
+                box.add_widget(app.trade_item_row(item))
+            if side.robux:
+                box.add_widget(Factory.Txt(text=f"R$ {side.robux:,}{robux_note}"))
+            if not side.items and not side.robux:
+                box.add_widget(Factory.Muted(text="Nothing"))
+
+    def open_roblox(self):
+        droid.open_url("https://www.roblox.com/trades")
 
 
 class HelpScreen(Screen):
@@ -289,6 +502,7 @@ class SettingsScreen(Screen):
         ids.smart_pick.active = c.value_mode.strategy == "pick"
         ids.notify_on.active = c.app.notifications
         ids.trade_notify_on.active = c.app.trade_notifications
+        ids.direct_trades.active = c.app.direct_trades
         ids.updates_on.active = c.app.check_updates
         self.refresh_battery()
 
@@ -305,6 +519,7 @@ class SettingsScreen(Screen):
         droid.sign_out_web()
         if app.trades_view:
             app.trades_view.go_home()
+        app.sync_direct_trades()
         app.notice("Signed out", "You're signed out of Roblox in this app.")
 
     def request_battery(self):
@@ -338,15 +553,21 @@ class SettingsScreen(Screen):
         c.value_mode.strategy = "pick" if ids.smart_pick.active else "warn"
         c.app.notifications = ids.notify_on.active
         c.app.trade_notifications = ids.trade_notify_on.active
+        c.app.direct_trades = ids.direct_trades.active
         c.app.check_updates = ids.updates_on.active
         problems = [e for e in validate_config(c) if not e.startswith(("No ads", "All ads", "roblox_user_id"))
                     and not e.startswith("Ad '")]
         if problems:
             return app.notice("Check your settings", "\n".join(problems))
+        turned_on = c.app.direct_trades and not app.cfg.app.direct_trades
         app.cfg = c
         app.persist()
         app.apply_trade_notifications()
-        app.toast("Settings saved")
+        if turned_on and droid.RobloxDirect.available:
+            droid.request_notification_permission()
+            app.notice("Read my trades directly", DIRECT_TRADES_TEXT)
+        else:
+            app.toast("Settings saved")
 
 
 class PickerScreen(Screen):
@@ -593,6 +814,7 @@ class RoliApp(App):
         self._stop_requested_at = 0.0
         self._last_error_seen = None
         self._update_url = ""
+        self._direct_checked_at = 0.0
         self._stack: list[str] = []
         register_fonts()
         from kivy.metrics import Metrics
@@ -601,7 +823,7 @@ class RoliApp(App):
         Builder.load_file(str(HERE / "ui.kv"))
         self.sm = SwipeManager(transition=SlideTransition(duration=0.18))
         for screen in (HomeScreen(), EditScreen(), SettingsScreen(), HistoryScreen(), CookieScreen(),
-                       TradesScreen(), HelpScreen(), PickerScreen()):
+                       TradesScreen(), TradeScreen(), HelpScreen(), PickerScreen()):
             self.sm.add_widget(screen)
         self.refresh_ads()
         self.update_cookie_status()
@@ -698,7 +920,7 @@ class RoliApp(App):
         if key == 27:  # Android back button (Escape on a PC)
             if self.login and self.login.is_open:
                 self.login.close()
-            elif self.sm.current == "trades" and self.trades_view:
+            elif self.sm.current == "trades" and self.trades_view and not self.sm.get_screen("trades").native:
                 self.trades_view.go_back(otherwise=lambda: self.switch_tab("home"))
             elif not self.go_back():
                 droid.move_to_background()  # like Home: never quit, posting keeps running
@@ -721,11 +943,43 @@ class RoliApp(App):
             self.trades_view.hide()
 
     def apply_trade_notifications(self):
-        """"New trade from X" needs the (hidden) trades page running, so it's loaded at startup."""
+        """"New trade from X": with "Read my trades directly" the background service checks; otherwise
+        the (hidden) trades page does, so it's loaded at startup."""
         enabled = self.cfg.app.notifications and self.cfg.app.trade_notifications
-        droid.set_trade_notifications(enabled)
-        if enabled and self.trades_view:
+        direct = self.cfg.app.direct_trades and droid.RobloxDirect.available
+        droid.RobloxDirect.set_enabled(direct)  # off deletes the stored sign-in
+        droid.set_trade_notifications(enabled and not direct)
+        if enabled and not direct and self.trades_view:
             self.trades_view.preload(*self._trades_area())
+        Clock.schedule_once(lambda *_: self.sync_direct_trades(), 1.0)  # after the sign-in is copied
+
+    def sync_direct_trades(self):
+        """Follows the Roblox sign-in for "Read my trades directly": list or Roblox page, background checks."""
+        self._direct_checked_at = time.time()
+        screen = self.sm.get_screen("trades")
+        direct = self.cfg.app.direct_trades and droid.RobloxDirect.signed_in()
+        if direct != screen.direct:
+            screen.direct = direct
+            screen.page = False
+            screen._loaded_at = 0.0
+            screen.apply_view()
+        if droid.trade_watch_wanted(self.cfg):
+            try:
+                self.engine.start(droid.WATCHING_TEXT)  # no-op if the service is already running
+            except Exception as e:  # e.g. Android refusing a start while the app is in the background
+                log.debug("Couldn't start the trade checks: %s", e)
+
+    def thumb_source(self, item_id: int) -> str:
+        return str(self.thumbs.path(item_id)) if self.thumbs.cached(item_id) else ""
+
+    def trade_item_row(self, item) -> ItemRow:
+        parts = [f"Value {item.value:,}", f"RAP {item.rap:,}"]
+        if item.serial:
+            parts.append(f"#{item.serial}")
+        if item.projected:
+            parts.append(f"[color={P.WARN}]Projected[/color]")
+        return ItemRow(thumb=self.thumb_source(item.asset_id), name=item.name, value="  ·  ".join(parts),
+                       warn=item.projected)
 
     def _on_new_intent(self, intent):
         """A notification was tapped while the app was already open."""
@@ -774,6 +1028,8 @@ class RoliApp(App):
         if status.get("unavailable") is not None and status.get("unavailable") != getattr(self, "_unavail", None):
             self._unavail = status.get("unavailable")
             self.refresh_ads()
+        if self.cfg.app.direct_trades and now - self._direct_checked_at > 3:
+            self.sync_direct_trades()  # picks up signing in (or out) on the Roblox page
         if self.login and self.login.is_open:
             found = clean_cookie(self.login.poll_cookie() or "")
             if looks_like_cookie(found):
@@ -955,6 +1211,10 @@ class RoliApp(App):
     def _thumbs_ready(self, ids):
         if self.sm.current == "edit":
             self.sm.get_screen("edit").refresh()
+        elif self.sm.current == "trades":
+            self.sm.get_screen("trades").refresh_thumbs()
+        elif self.sm.current == "trade":
+            self.sm.get_screen("trade").refresh()
         elif self.sm.current == "picker" and self.sm.get_screen("picker").ids.search.text:
             self.sm.get_screen("picker").search()
 

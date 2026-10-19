@@ -44,20 +44,31 @@ def _jstr(text: str):
 
 
 # ---- background service -------------------------------------------------------
+POSTING_TEXT = "Posting your trade ads"
+WATCHING_TEXT = "Checking for new Roblox trades"
+
+
 class Engine:
-    """Starts/stops the poster: an Android foreground service, or a thread on desktop."""
+    """Starts/stops the poster: an Android foreground service, or a thread on desktop.
+
+    On Android the same service also checks for new trades when "Read my trades directly" is on, so it
+    may already be running when posting starts; it notices want_running by itself then.
+    """
 
     def __init__(self, home: Path):
         self.home = home
         self._thread: threading.Thread | None = None
 
-    def start(self) -> None:
+    def start(self, text: str = POSTING_TEXT) -> None:
         if IS_ANDROID:
+            import runner
+            if runner.service_alive(self.home):
+                return
             from jnius import autoclass  # type: ignore
             service = autoclass(SERVICE_CLASS)
             activity = autoclass("org.kivy.android.PythonActivity").mActivity
-            service.start(activity, "icon", "Rolimons Ad Poster", "Posting your trade ads", "")
-        else:
+            service.start(activity, "icon", "Rolimons Ad Poster", text, "")
+        elif text == POSTING_TEXT:
             import runner
             self._thread = threading.Thread(target=runner.run, args=(self.home,), daemon=True)
             self._thread.start()
@@ -281,8 +292,8 @@ class TradesView:
     """Roblox's trades page in a native WebView laid over the Received trades tab.
 
     View-only: org.roliposter.ViewOnlyWebViewClient (android/java) answers every trade-changing request
-    with a local 403, so it never leaves the phone. The app never reads the Roblox login; it stays in
-    the WebView's own cookie store.
+    with a local 403, so it never leaves the phone. The Roblox login stays in the WebView's own cookie
+    store; only with "Read my trades directly" on does RobloxSession keep an encrypted copy (see RobloxDirect).
     """
 
     available = IS_ANDROID
@@ -421,17 +432,99 @@ def set_trade_notifications(enabled: bool) -> None:
 
 
 def sign_out_web() -> None:
-    """Clears every website sign-in in the app's WebViews (signs out of Roblox in the trades tab)."""
+    """Clears every website sign-in in the app's WebViews (signs out of Roblox in the trades tab),
+    and the stored copy "Read my trades directly" uses."""
     if not IS_ANDROID:
         return
     from jnius import autoclass  # type: ignore
     from android.runnable import run_on_ui_thread  # type: ignore
+    RobloxDirect.clear()
 
     def clear():
         manager = autoclass("android.webkit.CookieManager").getInstance()
         manager.removeAllCookies(None)
         manager.flush()
     run_on_ui_thread(clear)()
+
+
+# ---- "Read my trades directly" ------------------------------------------------------
+class RobloxDirect:
+    """Read-only Roblox trade requests made in Java with a stored, encrypted copy of the Roblox sign-in
+    (org.roliposter.RobloxSession / RobloxApi). Python only ever sees the replies, never the cookie.
+
+    fetch() blocks: call it from a worker thread (pyjnius detaches Python threads from Java when they end).
+    """
+
+    available = IS_ANDROID
+
+    @staticmethod
+    def set_enabled(enabled: bool) -> None:
+        """On: copy the sign-in from the trades page after it loads. Off: delete the copy (cookieless)."""
+        if not IS_ANDROID:
+            return
+        from jnius import autoclass  # type: ignore
+        session = autoclass("org.roliposter.RobloxSession")
+        session.setCaptureEnabled(bool(enabled))
+        if enabled:
+            RobloxDirect.capture()
+        else:
+            session.clear(_context())
+
+    @staticmethod
+    def capture() -> None:
+        """Copies the trades page's current Roblox sign-in (and applies any cookie Roblox rotated)."""
+        if not IS_ANDROID:
+            return
+        from jnius import autoclass  # type: ignore
+        from android.runnable import run_on_ui_thread  # type: ignore
+        run_on_ui_thread(lambda: autoclass("org.roliposter.RobloxSession").captureFromWebView(_context()))()
+
+    @staticmethod
+    def signed_in() -> bool:
+        if not IS_ANDROID:
+            return False
+        from jnius import autoclass  # type: ignore
+        return bool(autoclass("org.roliposter.RobloxSession").isSignedIn(_context()))
+
+    @staticmethod
+    def clear() -> None:
+        if IS_ANDROID:
+            from jnius import autoclass  # type: ignore
+            autoclass("org.roliposter.RobloxSession").clear(_context())
+
+    @staticmethod
+    def fetch(kind: str, arg: str, cursor: str = "") -> tuple[int, str]:
+        """(HTTP status, reply text). Status 0 = not signed in, -1 = network error, -2 = not allowed."""
+        if not IS_ANDROID:
+            return 0, ""
+        import json
+        from jnius import autoclass  # type: ignore
+        reply = json.loads(str(autoclass("org.roliposter.RobloxApi").fetch(_context(), kind, arg, cursor)))
+        return int(reply.get("status", -1)), str(reply.get("body", ""))
+
+
+def trade_watch_wanted(cfg) -> bool:
+    """Should the background service check for new trades? Only with "Read my trades directly" on."""
+    return (IS_ANDROID and cfg.app.direct_trades and cfg.app.notifications and cfg.app.trade_notifications
+            and RobloxDirect.signed_in())
+
+
+def start_trade_watcher(on: bool, interval_seconds: int = 90) -> None:
+    if not IS_ANDROID:
+        return
+    from jnius import autoclass  # type: ignore
+    watcher = autoclass("org.roliposter.TradeWatcher")
+    if on:
+        watcher.start(_context(), interval_seconds)
+    else:
+        watcher.stop()
+
+
+def set_service_text(text: str) -> None:
+    """The background service's status-bar text (posting vs. only checking for trades)."""
+    if IS_ANDROID:
+        from jnius import autoclass  # type: ignore
+        autoclass("org.roliposter.ForegroundText").update(_context(), text)
 
 
 # ---- Rolimons sign-in (WebView) -----------------------------------------------------

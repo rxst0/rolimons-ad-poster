@@ -4,9 +4,12 @@ Automatically posts your [Rolimons](https://www.rolimons.com/trades) trade ads e
 rotating through ads you set up. It runs as a simple app on **Windows** and **Android**, so you don't need Python.
 Fully open source, with no servers involved: each device posts on its own.
 
-> **Safe by design:** it posts Rolimons trade ads and can *show* your Roblox trades, view-only. It can't
-> accept, decline or send Roblox trades, and it never asks for, reads or stores your `.ROBLOSECURITY` cookie
-> or Roblox password. If any tool asks you to paste those, it's a scam.
+> **View-only for trades:** it posts Rolimons trade ads and can *show* your Roblox trades. It can't accept,
+> decline or send Roblox trades, and it never asks you to type or paste your Roblox password or
+> `.ROBLOSECURITY` cookie. If any tool asks you to paste those, it's a scam.
+> On Android, the optional **Read my trades directly** setting keeps an encrypted copy of your Roblox sign-in
+> on your phone so the app can read your trades ([details below](#reading-your-trades-directly-android)).
+> It's off by default.
 
 **Features**
 - Build ads by searching items by name, with item pictures and live Rolimons values
@@ -17,7 +20,9 @@ Fully open source, with no servers involved: each device posts on its own.
 - Optional posting hours (for example 09:00–23:00), a plain-English history of every post, pause and problem
   (with what to do about it), and a "Skip to next ad" button
 - Value checks: warns about overpaying ads and can favor high-demand ads
-- **Received trades (PC):** see the trades people send you on Roblox, view-only, in its own tab
+- **Received trades:** see the trades people send you on Roblox, view-only, in its own tab
+- **Android, optional:** your trades as a list in the app, with item pictures and Rolimons values, and
+  new-trade alerts even with the app closed
 
 ## Download (Windows)
 
@@ -42,7 +47,10 @@ Click **More info → Run anyway**. You can always read the source code here and
    The app picks up your cookie by itself, so there's nothing to copy.
 4. Add your ads and tap **Start posting**. A notification stays in your status bar while it posts, even with
    the screen off. You're notified when posting pauses (daily ad limit, posting hours, no internet), resumes
-   or stops, and (once you've signed in to Roblox in the Trades tab) when someone sends you a new trade. In **Settings**, tap **Allow running in the background** so Android doesn't pause it.
+   or stops, and (once you've signed in to Roblox in the Trades tab) when someone sends you a new trade.
+   New-trade alerts only work while the app is open or recently used, unless you turn on
+   [Read my trades directly](#reading-your-trades-directly-android).
+   In **Settings**, tap **Allow running in the background** so Android doesn't pause it.
    Some phones (Samsung, Xiaomi, OnePlus) also have their own battery saver: set the app to *Unrestricted* there.
 
 To update, install the newer APK over the old one; your ads and cookie are kept. The app tells you when one is out.
@@ -97,6 +105,35 @@ to Roblox inside it the first time, like in a browser.
   tab stays view-only. Like any Roblox extension, it runs while you're signed in to Roblox in that tab. Turn it
   off in Settings → *Show RoValra on trade pages*.
 
+## Reading your trades directly (Android)
+
+By default the Trades tab shows Roblox's own trades page, and your Roblox sign-in stays inside that page:
+the app never reads it. That page only runs while the app is open, so new-trade alerts stop soon after
+you leave the app.
+
+Turn on **Settings → Read my trades directly** to get:
+- your trades as a list in the app (inbound, outbound, completed, inactive), with item pictures,
+  Rolimons values, a give/get total and a warning for projected items; tap a trade to see every item
+- new-trade alerts every couple of minutes, even with the app closed. The status bar shows
+  *Checking for new Roblox trades* while this runs. It uses a little more battery, like posting does.
+
+How it works, and what changes:
+- **The app reads your Roblox sign-in.** After you sign in on the Roblox page in the Trades tab, the app
+  copies your `.ROBLOSECURITY` cookie and stores it encrypted with an Android Keystore key, which never
+  leaves the phone. The background service runs in a separate process that can't see the page's
+  sign-in, so it needs this copy.
+- **It's only used to read trades.** The Java code that holds the cookie sends a fixed list of read-only
+  requests: `GET trades.roblox.com/v1/trades/{inbound|outbound|completed|inactive}` and
+  `GET trades.roblox.com/v2/trades/{id}`. It can't send any other URL, method or body, so it can't
+  accept, decline, counter or send a trade, or change anything else on your account. The cookie isn't
+  passed to the app's Python code, isn't logged, and is only sent to Roblox.
+- If Roblox replaces your cookie in a reply, the app saves the new one and copies it back into the Roblox
+  page, so you stay signed in there.
+- **Turning the option off deletes the copy.** *Sign out of Roblox* and uninstalling the app delete it too.
+  Android's cloud backup is turned off for this app, so the copy isn't uploaded.
+- Anyone with your unlocked, rooted phone could in principle get the cookie, just like from any browser
+  on that phone. If you'd rather not take that risk, leave the option off.
+
 ## Settings
 
 | Setting | What it does |
@@ -112,6 +149,7 @@ to Roblox inside it the first time, like in a browser.
 | Start with Windows | Opens the app (in the tray) when you sign in |
 | Start posting automatically | Starts posting as soon as the app opens |
 | Show notifications / Check for updates | Windows notifications and update checks |
+| Read my trades directly (Android) | Trades list in the app and background new-trade alerts, using a stored copy of your Roblox sign-in ([details](#reading-your-trades-directly-android)) |
 
 ## Troubleshooting
 
@@ -154,12 +192,16 @@ The CLI reads `config.json` (see `config.example.json`) and the cookie from `.en
 Code layout (`roliposter/`): `api.py` (Rolimons requests and replies), `poster.py` (timer loop, rotation,
 retries), `inventory.py` (owned items), `schedule.py` (posting hours), `items.py` / `values.py`
 (item catalog and value checks), `thumbs.py` (item pictures), `tray.py`, `autostart.py`, `updates.py`,
-`theme.py`, `trades_viewer.py` (view-only rules for the trades tab), `webview_embed.py` (WebView2 inside Tk), `config.py`, `cookie.py`, `state.py`, `startup.py`.
+`theme.py`, `trades_viewer.py` (view-only rules for the trades tab), `roblox_trades.py` (parses Roblox trade
+replies for the Android trades list), `webview_embed.py` (WebView2 inside Tk), `config.py`, `cookie.py`, `state.py`, `startup.py`.
 
 ### Android app
 The Android app lives in `android/` (Kivy) and bundles the same `roliposter` engine. Posting runs in a
 foreground service (`android/service.py`) that talks to the screens through `status.json`/`control.json`
-(`android/runner.py`).
+(`android/runner.py`). The same service runs the background new-trade checks. The Java helpers live in
+`android/java/org/roliposter/`: `ViewOnlyWebViewClient` (blocks trade-changing requests),
+`RobloxSession` (the encrypted sign-in copy), `RobloxApi` (the fixed read-only requests),
+`TradeWatcher` (background checks) and `TradeNotifier` (notifications).
 ```
 py -3.12 -m venv .venv-mobile
 .venv-mobile\Scripts\pip install kivy==2.3.1 requests

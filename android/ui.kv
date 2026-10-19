@@ -18,6 +18,7 @@
 #:set WARN hex(P.WARN)
 #:set BAD hex(P.BAD)
 #:set OK hex(P.OK)
+#:set TONES {'win': OK, 'loss': BAD, 'even': MUTED, 'loading': MUTED}
 
 # ---- building blocks ---------------------------------------------------------
 <Txt@Label>:
@@ -646,7 +647,12 @@
                     Title:
                         text: 'Roblox trades'
                     Muted:
-                        text: "The Trades tab is view-only: accepting, declining and countering are blocked. Your Roblox sign-in stays in that tab; this app never reads it."
+                        text: "The Trades tab is view-only: accepting, declining and countering are blocked."
+                    SettingRow:
+                        id: direct_trades
+                        text: 'Read my trades directly'
+                    Muted:
+                        text: "Shows your trades as a list with values, and checks for new trades with the app closed. The app keeps an encrypted copy of your Roblox sign-in on this phone to read your trades (nothing else). Off: your sign-in stays in the Roblox page and the app never reads it."
                     FlatButton:
                         text: 'Sign out of Roblox'
                         on_release: root.sign_out_roblox()
@@ -848,6 +854,91 @@
         text: 'Help'
         tab: 'help'
 
+<TradeThumb@Image>:
+    size_hint: None, None
+    size: dp(34), dp(34)
+    opacity: 1 if self.source else 0.25
+
+<TradeCard>:
+    orientation: 'vertical'
+    size_hint_y: None
+    height: dp(150) if root.note else dp(132)
+    padding: dp(14), dp(10)
+    spacing: dp(4)
+    canvas.before:
+        Color:
+            rgba: HOVER if self.state == 'down' else FIELD
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(12)]
+    BoxLayout:
+        size_hint_y: None
+        height: dp(22)
+        Label:
+            text: root.partner
+            bold: True
+            color: TEXT
+            font_size: sp(16)
+            text_size: self.size
+            halign: 'left'
+            valign: 'middle'
+            shorten: True
+            shorten_from: 'right'
+        Label:
+            text: root.when
+            color: MUTED
+            font_size: sp(12)
+            size_hint_x: None
+            width: self.texture_size[0]
+    BoxLayout:
+        size_hint_y: None
+        height: dp(36)
+        spacing: dp(8)
+        Label:
+            text: 'Give'
+            color: MUTED
+            font_size: sp(12)
+            size_hint_x: None
+            width: dp(34)
+        BoxLayout:
+            id: give_box
+            spacing: dp(4)
+    BoxLayout:
+        size_hint_y: None
+        height: dp(36)
+        spacing: dp(8)
+        Label:
+            text: 'Get'
+            color: MUTED
+            font_size: sp(12)
+            size_hint_x: None
+            width: dp(34)
+        BoxLayout:
+            id: get_box
+            spacing: dp(4)
+    Label:
+        text: root.summary
+        color: TONES[root.tone]
+        font_size: sp(13)
+        size_hint_y: None
+        height: dp(18)
+        text_size: self.size
+        halign: 'left'
+        valign: 'middle'
+        shorten: True
+        shorten_from: 'right'
+    Label:
+        text: root.note
+        color: WARN
+        font_size: sp(12)
+        size_hint_y: None
+        height: dp(16) if root.note else 0
+        opacity: 1 if root.note else 0
+        text_size: self.size
+        halign: 'left'
+        valign: 'middle'
+
 <TradesScreen>:
     name: 'trades'
     BoxLayout:
@@ -880,20 +971,20 @@
                     halign: 'left'
                     valign: 'bottom'
                 Label:
-                    text: 'Received · view only'
+                    text: 'Your trades · view only' if root.direct else 'Received · view only'
                     font_size: sp(12)
                     color: MUTED
                     text_size: self.size
                     halign: 'left'
                     valign: 'top'
             FlatButton:
-                text: 'Inbound'
+                text: ('Roblox page' if not root.page else 'List') if root.direct else 'Inbound'
                 size_hint_x: None
-                width: dp(84)
+                width: dp(108) if root.direct and not root.page else dp(84)
                 height: dp(40)
                 pos_hint: {'center_y': 0.5}
                 font_size: sp(14)
-                on_release: root.inbound()
+                on_release: root.first_button()
             FlatButton:
                 text: 'Reload'
                 size_hint_x: None
@@ -902,13 +993,122 @@
                 pos_hint: {'center_y': 0.5}
                 font_size: sp(14)
                 on_release: root.reload()
+        # The app's own list ("Read my trades directly"); otherwise the Roblox page covers this area.
+        BoxLayout:
+            orientation: 'vertical'
+            size_hint_y: 1 if root.direct and not root.page else None
+            height: 0
+            opacity: 1 if root.direct and not root.page else 0
+            disabled: not (root.direct and not root.page)
+            BoxLayout:
+                size_hint_y: None
+                height: dp(54)
+                padding: dp(14), dp(8)
+                spacing: dp(6)
+                Chip:
+                    text: 'Inbound'
+                    font_size: sp(13)
+                    selected: root.kind == 'inbound'
+                    on_release: root.set_kind('inbound')
+                Chip:
+                    text: 'Outbound'
+                    font_size: sp(13)
+                    selected: root.kind == 'outbound'
+                    on_release: root.set_kind('outbound')
+                Chip:
+                    text: 'Completed'
+                    font_size: sp(13)
+                    selected: root.kind == 'completed'
+                    on_release: root.set_kind('completed')
+                Chip:
+                    text: 'Inactive'
+                    font_size: sp(13)
+                    selected: root.kind == 'inactive'
+                    on_release: root.set_kind('inactive')
+            ScrollView:
+                id: trades_scroll
+                do_scroll_x: False
+                BoxLayout:
+                    orientation: 'vertical'
+                    padding: dp(14), dp(2), dp(14), dp(24)
+                    spacing: dp(10)
+                    size_hint_y: None
+                    height: self.minimum_height
+                    Muted:
+                        text: root.status_text
+                        halign: 'center'
+                        height: self.texture_size[1] + dp(16) if root.status_text else 0
+                    BoxLayout:
+                        id: trades_box
+                        orientation: 'vertical'
+                        spacing: dp(10)
+                        size_hint_y: None
+                        height: self.minimum_height
+                    FlatButton:
+                        text: 'Load more' if root.more else ''
+                        height: dp(46) if root.more else 0
+                        opacity: 1 if root.more else 0
+                        disabled: not root.more
+                        on_release: root.load(more=True)
         Label:
             text: root.placeholder
             color: MUTED
             font_size: sp(14)
+            size_hint_y: None if root.direct and not root.page else 1
+            height: 0
+            opacity: 0 if root.direct and not root.page else 1
             text_size: self.width - dp(40), None
             halign: 'center'
             valign: 'middle'
+
+<TradeScreen>:
+    name: 'trade'
+    BoxLayout:
+        orientation: 'vertical'
+        canvas.before:
+            Color:
+                rgba: BG
+            Rectangle:
+                pos: self.pos
+                size: self.size
+        TopBar:
+            title: root.title
+        ScrollView:
+            id: scroll
+            do_scroll_x: False
+            BoxLayout:
+                orientation: 'vertical'
+                padding: dp(14), dp(12), dp(14), dp(30)
+                spacing: dp(12)
+                size_hint_y: None
+                height: self.minimum_height
+                Txt:
+                    text: root.summary
+                    bold: True
+                    color: TONES[root.tone]
+                Muted:
+                    text: root.note
+                Title:
+                    text: 'You give'
+                BoxLayout:
+                    id: give_box
+                    orientation: 'vertical'
+                    spacing: dp(8)
+                    size_hint_y: None
+                    height: self.minimum_height
+                Title:
+                    text: 'You get'
+                BoxLayout:
+                    id: get_box
+                    orientation: 'vertical'
+                    spacing: dp(8)
+                    size_hint_y: None
+                    height: self.minimum_height
+                Muted:
+                    text: 'Values are Rolimons values (RAP when Rolimons has none). View only: to accept, decline or counter, use roblox.com or the Roblox app.'
+                FlatButton:
+                    text: 'Open on roblox.com'
+                    on_release: root.open_roblox()
 
 <HelpScreen>:
     name: 'help'

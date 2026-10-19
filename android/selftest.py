@@ -152,6 +152,11 @@ class SelfTest:
                 break
         self.record("trades tab blocks trade-changing requests",
                     "Blocked" in result and droid.TradesView.blocked_count() > 0, result)
+        # "Read my trades directly" can only make its fixed read-only requests.
+        refused = [droid.RobloxDirect.fetch(kind, arg)[0] for kind, arg in
+                   (("list", "../1/decline"), ("trade", "1/accept"), ("send", "1"))]
+        self.record("direct trade reads refuse anything but their fixed requests", refused == [-2, -2, -2],
+                    str(refused))
         app.switch_tab("home")
         yield 1
 

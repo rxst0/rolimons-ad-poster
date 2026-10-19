@@ -53,5 +53,9 @@ public class ViewOnlyWebViewClient extends WebViewClient {
     @Override
     public void onPageFinished(WebView view, String url) {
         if (pageScript != null && !pageScript.isEmpty()) view.evaluateJavascript(pageScript, null);
+        String host = url == null ? null : Uri.parse(url).getHost();
+        if (host != null && (host.equals("roblox.com") || host.endsWith(".roblox.com"))) {
+            RobloxSession.captureFromWebView(view.getContext());  // only when "Read my trades directly" is on
+        }
     }
 }

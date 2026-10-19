@@ -47,6 +47,9 @@ class AppSettings:
     auto_start_posting: bool = False  # start posting as soon as the app opens
     notifications: bool = True
     trade_notifications: bool = True  # Android: "New trade from X" notifications
+    # Android: keep an encrypted copy of the Roblox sign-in so trades can be read without the Roblox page
+    # (the app's own trades list, and new-trade checks from the background). Off = cookieless.
+    direct_trades: bool = False
     check_updates: bool = True
     rovalra: bool = True              # load the bundled RoValra extension in the Received trades tab
 
@@ -117,6 +120,7 @@ def config_from_dict(data: dict) -> Config:
                 auto_start_posting=bool(app.get("auto_start_posting", False)),
                 notifications=bool(app.get("notifications", True)),
                 trade_notifications=bool(app.get("trade_notifications", True)),
+                direct_trades=bool(app.get("direct_trades", False)),
                 check_updates=bool(app.get("check_updates", True)),
                 rovalra=bool(app.get("rovalra", True)),
             ),

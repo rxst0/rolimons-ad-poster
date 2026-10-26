@@ -22,10 +22,10 @@ from kivy.app import App  # noqa: E402
 from kivy.clock import Clock, mainthread  # noqa: E402
 from kivy.core.window import Window  # noqa: E402
 from kivy.factory import Factory  # noqa: E402
-from kivy.graphics import Color, Rectangle  # noqa: E402
+from kivy.graphics import Color, Line, Rectangle  # noqa: E402
 from kivy.lang import Builder  # noqa: E402
 from kivy.metrics import dp  # noqa: E402
-from kivy.properties import BooleanProperty, ColorProperty, NumericProperty, StringProperty  # noqa: E402
+from kivy.properties import BooleanProperty, ColorProperty, ListProperty, NumericProperty, StringProperty  # noqa: E402
 from kivy.uix.behaviors import ButtonBehavior  # noqa: E402
 from kivy.uix.boxlayout import BoxLayout  # noqa: E402
 from kivy.uix.label import Label  # noqa: E402
@@ -48,6 +48,7 @@ from roliposter.logsetup import REDACTOR, setup_logging  # noqa: E402
 from roliposter.paths import cache_dir, config_path, env_path, log_dir, state_path  # noqa: E402
 from roliposter.poster import fmt_duration  # noqa: E402
 from roliposter.roblox_trades import KINDS, KIND_LABELS, ago, parse_details, parse_list, verdict  # noqa: E402
+from roliposter.portfolio import RANGES, change, fetch_history, totals  # noqa: E402
 from roliposter.state import PostHistory  # noqa: E402
 from roliposter.thumbs import ThumbnailCache  # noqa: E402
 from roliposter.updates import check_for_update  # noqa: E402
@@ -70,6 +71,9 @@ Tap "Start posting". One ad goes out about every 15 minutes (Rolimons' cooldown)
 [b]Trades[/b]
 The Trades tab shows Roblox's trades page. Sign in to Roblox there the first time. It is view-only: accepting, declining, countering and sending are blocked inside the app. Respond on roblox.com or in the Roblox app. Settings > "Sign out of Roblox" signs you out.
 
+[b]Items[/b]
+The Items tab shows the limiteds in your Rolimons inventory, their total value and RAP (robux), and a chart of your value over the last day, month, 6 months or year (from your Rolimons player page). When you make an ad, "Add item you offer" lists only items you own.
+
 [b]Read my trades directly (optional)[/b]
 Turn this on in Settings to see your trades as a list in the app (inbound, outbound, completed, inactive) with item pictures and Rolimons values, and to get new-trade alerts even when the app is closed. To do this, the app keeps an encrypted copy of your Roblox sign-in (.ROBLOSECURITY) on this phone and uses it only to read your trades. It's never sent anywhere except Roblox, and it can't be used to accept, decline or send trades. Turning the option off deletes the copy.
 
@@ -84,7 +88,7 @@ This app never asks you to type or paste your Roblox password or .ROBLOSECURITY 
 
 Run posting on one device at a time: two devices posting for the same account hit each other's cooldown.
 """
-TABS = ("home", "trades", "history", "settings", "help")
+TABS = ("home", "trades", "items", "history", "settings", "help")
 DIRECT_TRADES_TEXT = ("Your trades now show as a list in the Trades tab, and new-trade alerts work with the app "
                       "closed.\n\nThe app keeps an encrypted copy of your Roblox sign-in on this phone and uses it "
                       "only to read your trades. Turn this off any time to delete the copy.\n\n"
@@ -581,49 +585,180 @@ class SettingsScreen(Screen):
             app.toast("Settings saved")
 
 
+class ValueChart(Widget):
+    """A line chart of value over time (points: [(unix time, value), ...])."""
+    points = ListProperty([])
+    line_color = ColorProperty(get_color_from_hex(P.ACCENT))
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.bind(points=self.redraw, size=self.redraw, pos=self.redraw, line_color=self.redraw)
+
+    def redraw(self, *_):
+        self.canvas.clear()
+        if len(self.points) < 2 or self.width < 10:
+            return
+        t0, t1 = self.points[0][0], self.points[-1][0]
+        values = [v for _t, v in self.points]
+        lo, hi = min(values), max(values)
+        pad = (hi - lo) * 0.08 or max(1, hi * 0.01)
+        lo, hi = lo - pad, hi + pad
+        coords = []
+        for t, v in self.points:
+            coords += [self.x + (t - t0) / ((t1 - t0) or 1) * self.width,
+                       self.y + (v - lo) / (hi - lo) * self.height]
+        with self.canvas:
+            Color(*get_color_from_hex(P.BORDER))
+            for frac in (0.0, 0.5, 1.0):  # light guide lines at the bottom, middle and top
+                y = self.y + frac * self.height
+                Line(points=[self.x, y, self.right, y], width=1)
+            Color(*self.line_color)
+            Line(points=coords, width=dp(1.6), joint="round", cap="round")
+
+
+class ItemsScreen(Screen):
+    """What you own on Roblox (your Rolimons inventory), what it's worth, and its value over time."""
+    value_text = StringProperty("")
+    rap_text = StringProperty("")
+    count_text = StringProperty("")
+    change_text = StringProperty("")
+    tone = StringProperty("even")
+    range = StringProperty("1m")
+    chart_note = StringProperty("")
+    message = StringProperty("")
+
+    def on_pre_enter(self):
+        app = App.get_running_app()
+        app.load_portfolio()
+        self.refresh()
+
+    def set_range(self, key: str):
+        self.range = key
+        self.refresh()
+
+    def reload(self):
+        App.get_running_app().load_portfolio(force=True)
+        self.refresh()
+
+    def refresh(self):
+        app = App.get_running_app()
+        box = self.ids.holdings
+        box.clear_widgets()
+        inventory = app.inventory
+        if app.cfg.roblox_user_id <= 0:
+            self.message = "Sign in to Rolimons on the Ads tab to see your items."
+        elif inventory is None:
+            self.message = "Loading your items..."
+        elif inventory.private:
+            self.message = "Your Roblox inventory is private, so Rolimons can't see your items."
+        else:
+            self.message = ""
+        if inventory is None or inventory.private:
+            self.value_text = self.rap_text = self.count_text = self.change_text = ""
+            self.ids.chart.points = []
+            self.chart_note = ""
+            return
+        t = totals(inventory, app.catalog)
+        self.value_text = f"{t.value:,}"
+        self.rap_text = f"{t.rap:,}"
+        self.count_text = f"{t.items} item{'s' if t.items != 1 else ''}"
+        self.refresh_chart(t)
+        ids = []
+        for h in t.holdings:
+            parts = [f"Value {h.value:,}", f"RAP {h.rap:,}"]
+            if h.count > 1:
+                parts.insert(0, f"{h.count} copies")
+            if h.on_hold:
+                parts.append(f"{h.on_hold} on hold")
+            if h.projected:
+                parts.append(f"[color={P.WARN}]Projected[/color]")
+            box.add_widget(ItemRow(thumb=app.thumb_source(h.item_id), name=h.name, value="  ·  ".join(parts),
+                                   warn=h.projected))
+            ids.append(h.item_id)
+        app.request_thumbs(ids)
+
+    def refresh_chart(self, t):
+        app = App.get_running_app()
+        history = app.value_history
+        seconds = dict((key, secs) for key, _label, secs in RANGES)[self.range]
+        if history is None:
+            self.ids.chart.points = []
+            self.change_text = ""
+            self.chart_note = app.history_status or "Loading value history..."
+            return
+        part = history.with_now(t.value, t.rap).since(seconds)
+        self.ids.chart.points = list(zip(part.times, part.values))
+        diff, pct = change(part)
+        label = dict((key, lbl) for key, lbl, _s in RANGES)[self.range]
+        self.change_text = (f"{diff:+,}" + (f" ({pct:+.1f}%)" if pct is not None else "") + f" in {label}"
+                            if len(part.values) > 1 else "")
+        self.tone = "even" if diff == 0 else "win" if diff > 0 else "loss"
+        self.ids.chart.line_color = get_color_from_hex({"win": P.OK, "loss": P.BAD}.get(self.tone, P.ACCENT))
+        if len(part.values) > 1:
+            self.chart_note = f"Low {min(part.values):,}  ·  High {max(part.values):,}"
+        else:
+            self.chart_note = "Not enough history for this range yet."
+
+
 class PickerScreen(Screen):
     """Full-screen item search: tap an item to add it to the ad being edited."""
     title = StringProperty("Add item")
+    side = "want"
 
     def open_for(self, side: str):
         self.side = side
         self.title = "Add item you offer" if side == "offer" else "Add item you want"
         self.ids.search.text = ""
-        self.ids.results.clear_widgets()
-        self.ids.results.add_widget(Label(text="Type to search all Rolimons items.", color=(0.55, 0.58, 0.64, 1),
-                                          size_hint_y=None, height=40, font_size="14sp"))
+        self.search()
 
     def on_enter(self):
-        Clock.schedule_once(lambda *_: setattr(self.ids.search, "focus", True), 0.15)
+        # Offers start with your items listed, so the keyboard only opens for "want".
+        if self.side != "offer":
+            Clock.schedule_once(lambda *_: setattr(self.ids.search, "focus", True), 0.15)
 
     def schedule_search(self):
         Clock.unschedule(self.search)
         Clock.schedule_once(self.search, 0.3)
 
+    def _note(self, text: str):
+        self.ids.results.add_widget(Factory.Muted(text=text, halign="center", height=dp(40)))
+
     def search(self, *_):
+        """Offers: only items in your Rolimons inventory (all of them until you type). Wants: any item."""
         app = App.get_running_app()
         box = self.ids.results
         box.clear_widgets()
         q = self.ids.search.text.strip().lower()
-        if not q:
+        owned = app.owned_counts() if self.side == "offer" else None
+        if self.side == "offer" and owned is None:
+            self._note("Your Rolimons inventory isn't available (not loaded yet, or private), so this searches "
+                       "all items.")
+        if not q and owned is None:
+            if self.side != "offer":
+                self._note("Type to search all Rolimons items.")
             return
         if not app.catalog:
-            box.add_widget(Label(text="Item list still loading...", color=(0.55, 0.58, 0.64, 1),
-                                 size_hint_y=None, height=36))
-            return
+            return self._note("Item list still loading...")
+        pool = ([i for i in (app.catalog.get(item_id) for item_id in owned) if i] if owned is not None
+                else app.catalog.items.values())
         matches = []
-        for item in app.catalog.items.values():
-            if q == str(item.id) or q in item.name.lower() or q == item.acronym.lower():
-                rank = 0 if q in (item.acronym.lower(), str(item.id)) else 1 if item.name.lower().startswith(q) else 2
+        for item in pool:
+            if not q or q == str(item.id) or q in item.name.lower() or q == item.acronym.lower():
+                rank = (0 if q and q in (item.acronym.lower(), str(item.id)) else
+                        1 if item.name.lower().startswith(q) else 2)
                 matches.append((rank, -item.default_value, item.id))
         matches.sort()
-        ids = [m[2] for m in matches[:30]]
+        ids = [m[2] for m in matches[:200 if owned is not None else 30]]
+        if owned is not None:
+            self._note(f"Your items ({len(ids)})" if not q else f"Your items matching \"{q}\" ({len(ids)})")
         for item_id in ids:
             row = app.item_row(item_id)
+            if owned and owned.get(item_id, 0) > 1:
+                row.name += f"  ×{owned[item_id]}"
             row.add_action("Add", lambda i=item_id: self.choose(i), accent=True)
             box.add_widget(row)
         if not ids:
-            box.add_widget(Label(text="No matching items.", color=(0.55, 0.58, 0.64, 1), size_hint_y=None, height=36))
+            self._note("You don't own a matching item." if owned is not None else "No matching items.")
         self.ids.scroll.scroll_y = 1
         app.request_thumbs(ids)
 
@@ -827,6 +962,9 @@ class RoliApp(App):
         self._last_error_seen = None
         self._update_url = ""
         self._direct_checked_at = 0.0
+        self.value_history = None   # roliposter.portfolio.History, from your Rolimons player page
+        self.history_status = ""
+        self._portfolio_at = 0.0
         self._stack: list[str] = []
         register_fonts()
         from kivy.metrics import Metrics
@@ -835,8 +973,10 @@ class RoliApp(App):
         Builder.load_file(str(HERE / "ui.kv"))
         self.sm = SwipeManager(transition=SlideTransition(duration=0.18))
         for screen in (HomeScreen(), EditScreen(), SettingsScreen(), HistoryScreen(), CookieScreen(),
-                       TradesScreen(), TradeScreen(), HelpScreen(), PickerScreen()):
+                       TradesScreen(), TradeScreen(), ItemsScreen(), HelpScreen(), PickerScreen()):
             self.sm.add_widget(screen)
+        # Before anything opens the Trades tab (e.g. a tapped notification): list or Roblox page.
+        Clock.schedule_once(lambda *_: self.sync_direct_trades(), 0)
         self.refresh_ads()
         self.update_cookie_status()
         Clock.schedule_interval(self.tick, 0.5)
@@ -997,7 +1137,17 @@ class RoliApp(App):
         """A notification was tapped while the app was already open."""
         tab = droid.opened_tab(intent)
         if tab:
-            Clock.schedule_once(lambda *_: self.switch_tab(tab), 0)
+            Clock.schedule_once(lambda *_: self.open_tab_from_notification(tab), 0)
+
+    def open_tab_from_notification(self, tab: str):
+        if tab == "trades":  # a new-trade alert: show the trades list, not the Roblox page
+            self.sync_direct_trades()
+            trades = self.sm.get_screen("trades")
+            trades.page, trades.kind = False, "inbound"
+            trades._loaded_at = 0.0
+            if self.sm.current == "trades":
+                trades.apply_view()
+        self.switch_tab(tab)
 
     def notice(self, title: str, message: str, buttons=(("OK", None),)):
         Notice(title, message, buttons).open()
@@ -1137,7 +1287,7 @@ class RoliApp(App):
                              f"Your cookie expires in {max(1, round(days * 24))} hours. Sign in again to keep posting.")
         tab = droid.opened_tab()  # opened by tapping one of our notifications
         if tab:
-            self.switch_tab(tab)
+            self.open_tab_from_notification(tab)
         screen = droid.launch_extra("screen")
         if screen == "edit" and self.cfg.ads:
             self.edit_ad(0)
@@ -1227,8 +1377,16 @@ class RoliApp(App):
             self.sm.get_screen("trades").refresh_thumbs()
         elif self.sm.current == "trade":
             self.sm.get_screen("trade").refresh()
-        elif self.sm.current == "picker" and self.sm.get_screen("picker").ids.search.text:
+        elif self.sm.current == "picker":
             self.sm.get_screen("picker").search()
+        elif self.sm.current == "items":
+            self.sm.get_screen("items").refresh()
+
+    def owned_counts(self) -> dict[int, int] | None:
+        """Item ID -> copies you own, or None when your Rolimons inventory isn't known (or is private)."""
+        if self.inventory is None or self.inventory.private:
+            return None
+        return self.inventory.counts
 
     def _load_catalog(self):
         for attempt in range(4):
@@ -1255,6 +1413,37 @@ class RoliApp(App):
     def _inventory_ready(self, inventory):
         self.inventory = inventory
         self.refresh_ads()
+        if self.sm.current == "items":
+            self.sm.get_screen("items").refresh()
+        elif self.sm.current == "picker":
+            self.sm.get_screen("picker").search()
+
+    def load_portfolio(self, force: bool = False):
+        """Items tab: refreshes your inventory and value history (at most every 10 minutes)."""
+        if self.cfg.roblox_user_id <= 0 or (not force and time.time() - self._portfolio_at < 600):
+            return
+        self._portfolio_at = time.time()
+        user_id = self.cfg.roblox_user_id
+
+        def work():
+            self._load_inventory()
+            try:
+                history, status = fetch_history(requests.Session(), user_id), ""
+            except Exception as e:
+                log.warning("Couldn't load value history: %s", e)
+                history, status = None, "Couldn't load your value history from Rolimons. Tap Reload to try again."
+            self._history_ready(history, status)
+        threading.Thread(target=work, daemon=True).start()
+
+    @mainthread
+    def _history_ready(self, history, status: str):
+        if history is not None or self.value_history is None:
+            self.value_history = history
+        self.history_status = status
+        if history is None:
+            self._portfolio_at = 0.0  # try again next time the tab opens
+        if self.sm.current == "items":
+            self.sm.get_screen("items").refresh()
 
     def _check_updates(self):
         try:

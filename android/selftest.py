@@ -339,6 +339,39 @@ class SelfTest:
         app.switch_tab("home")
         yield 1
 
+        # Items tab: inventory, totals and the value chart (user 1 is set by the fake cookie above).
+        app.switch_tab("items")
+        items = app.sm.get_screen("items")
+        ok = yield from self.wait_until(lambda: app.inventory is not None and not items.message.startswith("Loading"), 60)
+        yield from self.wait_until(lambda: app.value_history is not None or app.history_status, 60)
+        yield 2
+        self.shot("9-items")
+        self.record("items tab shows your items or explains why not",
+                    ok and (bool(items.value_text) or bool(items.message)),
+                    f"value {items.value_text!r}, message {items.message!r}, chart {len(items.ids.chart.points)} points, "
+                    f"note {items.chart_note!r}")
+        for key in ("1d", "6m", "1y"):
+            items.set_range(key)
+        yield 1
+        self.record("value chart ranges switch", items.range == "1y", items.change_text)
+        # "Add item you offer" lists only items you own.
+        if app.cfg.ads:
+            app.edit_ad(0)
+            yield 1
+            app.sm.get_screen("edit").open_picker("offer")
+            yield 2
+            picker = app.sm.get_screen("picker")
+            owned = app.owned_counts()
+            rows = [w for w in picker.ids.results.children if hasattr(w, "add_action")]
+            self.record("offer picker lists only owned items",
+                        owned is None or len(rows) <= len(owned), f"{len(rows)} rows, {len(owned or {})} owned")
+            self.shot("10-offer-picker")
+            app.go_back()
+            app.go_back()
+            yield 1
+        app.switch_tab("home")
+        yield 1
+
         if droid.IS_ANDROID:
             yield from self.notification_steps()
 

@@ -348,11 +348,12 @@ class TradesView:
             self._web.setVisibility(View.VISIBLE)
 
     def hide(self) -> None:
-        if self._web is None:
-            return
         from android.runnable import run_on_ui_thread  # type: ignore
 
         def hide_ui():
+            # Checked on the UI thread: a show() queued just before may not have created the page yet.
+            if self._web is None:
+                return
             from jnius import autoclass  # type: ignore
             # INVISIBLE (not GONE) keeps the page running, so the new-trade check carries on.
             self._web.setVisibility(autoclass("android.view.View").INVISIBLE)

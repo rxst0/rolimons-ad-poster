@@ -845,6 +845,9 @@
         text: 'Trades'
         tab: 'trades'
     NavButton:
+        text: 'Items'
+        tab: 'items'
+    NavButton:
         text: 'History'
         tab: 'history'
     NavButton:
@@ -1060,6 +1063,110 @@
             text_size: self.width - dp(40), None
             halign: 'center'
             valign: 'middle'
+
+<ItemsScreen>:
+    name: 'items'
+    BoxLayout:
+        orientation: 'vertical'
+        canvas.before:
+            Color:
+                rgba: BG
+            Rectangle:
+                pos: self.pos
+                size: self.size
+        BoxLayout:
+            size_hint_y: None
+            height: dp(58)
+            padding: dp(16), dp(9), dp(10), dp(9)
+            canvas.before:
+                Color:
+                    rgba: SURFACE
+                Rectangle:
+                    pos: self.pos
+                    size: self.size
+            Label:
+                text: 'Your items'
+                bold: True
+                font_size: sp(17)
+                color: TEXT
+                text_size: self.size
+                halign: 'left'
+                valign: 'middle'
+            FlatButton:
+                text: 'Reload'
+                size_hint_x: None
+                width: dp(80)
+                height: dp(40)
+                pos_hint: {'center_y': 0.5}
+                font_size: sp(14)
+                on_release: root.reload()
+        ScrollView:
+            do_scroll_x: False
+            BoxLayout:
+                orientation: 'vertical'
+                padding: dp(14), dp(12), dp(14), dp(30)
+                spacing: dp(12)
+                size_hint_y: None
+                height: self.minimum_height
+                Muted:
+                    text: root.message
+                    halign: 'center'
+                    height: self.texture_size[1] + dp(16) if root.message else 0
+                Card:
+                    opacity: 1 if root.value_text else 0
+                    height: self.minimum_height if root.value_text else 0
+                    disabled: not root.value_text
+                    FieldLabel:
+                        text: 'TOTAL VALUE'
+                    Txt:
+                        text: root.value_text
+                        font_size: sp(28)
+                        bold: True
+                    Muted:
+                        text: 'RAP (robux)  [b][color=' + P.TEXT + ']' + root.rap_text + '[/color][/b]   ·   ' + root.count_text if root.rap_text else ''
+                    Txt:
+                        text: root.change_text
+                        color: TONES[root.tone]
+                        bold: True
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(40)
+                        spacing: dp(8)
+                        Chip:
+                            text: '1D'
+                            selected: root.range == '1d'
+                            on_release: root.set_range('1d')
+                        Chip:
+                            text: '1M'
+                            selected: root.range == '1m'
+                            on_release: root.set_range('1m')
+                        Chip:
+                            text: '6M'
+                            selected: root.range == '6m'
+                            on_release: root.set_range('6m')
+                        Chip:
+                            text: '1Y'
+                            selected: root.range == '1y'
+                            on_release: root.set_range('1y')
+                    ValueChart:
+                        id: chart
+                        size_hint_y: None
+                        height: dp(170)
+                    Muted:
+                        text: root.chart_note
+                        halign: 'center'
+                Title:
+                    text: 'What you own' if root.value_text else ''
+                    height: self.texture_size[1] if root.value_text else 0
+                BoxLayout:
+                    id: holdings
+                    orientation: 'vertical'
+                    spacing: dp(8)
+                    size_hint_y: None
+                    height: self.minimum_height
+                Muted:
+                    text: 'Values are Rolimons values (RAP when Rolimons has none). History is from your Rolimons player page, one point a day, plus your current total.' if root.value_text else ''
+                    halign: 'center'
 
 <TradeScreen>:
     name: 'trade'

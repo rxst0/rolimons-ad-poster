@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from .items import ItemCatalog
 
 KINDS = ("inbound", "outbound", "completed", "inactive")
-KIND_LABELS = {"inbound": "Inbound", "outbound": "Outbound", "completed": "Completed", "inactive": "Inactive"}
+KIND_LABELS = {"inbound": "Received", "outbound": "Sent", "completed": "Completed", "inactive": "Inactive"}
 ROBUX_AFTER_TAX = 0.7  # Roblox keeps 30% of robux added to a trade
 
 

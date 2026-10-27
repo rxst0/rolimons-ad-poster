@@ -1009,12 +1009,12 @@
                 padding: dp(14), dp(8)
                 spacing: dp(6)
                 Chip:
-                    text: 'Inbound'
+                    text: 'Received'
                     font_size: sp(13)
                     selected: root.kind == 'inbound'
                     on_release: root.set_kind('inbound')
                 Chip:
-                    text: 'Outbound'
+                    text: 'Sent'
                     font_size: sp(13)
                     selected: root.kind == 'outbound'
                     on_release: root.set_kind('outbound')

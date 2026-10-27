@@ -19,6 +19,7 @@ CHANNEL_POSTING = "posting"
 CHANNEL_TRADES = "trades"
 POSTING_NOTIFICATION_ID = 3001  # pause/resume/stop share one slot, so the newest replaces the last
 OPEN_TAB_EXTRA = "roliposter_open_tab"
+TRADES_LIST_EXTRA = "roliposter_trades_list"  # see org.roliposter.TradeNotifier
 
 
 def data_home() -> Path:
@@ -173,6 +174,21 @@ def opened_tab(intent=None) -> str | None:
         return value if value in TABS_FROM_NOTIFICATIONS else None
     except Exception:
         return None
+
+
+def opened_trades_list(intent=None) -> str:
+    """Which trades list a tapped trade notification asked for ("completed" for accepted trades)."""
+    if not IS_ANDROID:
+        return "inbound"
+    try:
+        from jnius import autoclass  # type: ignore
+        intent = intent or autoclass("org.kivy.android.PythonActivity").mActivity.getIntent()
+        value = intent.getStringExtra(TRADES_LIST_EXTRA) if intent is not None else None
+        if value is not None:
+            intent.removeExtra(TRADES_LIST_EXTRA)
+        return str(value) if value in ("inbound", "completed") else "inbound"
+    except Exception:
+        return "inbound"
 
 
 # ---- battery optimisation -------------------------------------------------------

@@ -75,10 +75,10 @@ The Trades tab shows Roblox's trades page. Sign in to Roblox there the first tim
 The Items tab shows the limiteds in your Rolimons inventory, their total value and RAP (robux), and a chart of your value over the last day, month, 6 months or year (from your Rolimons player page). When you make an ad, "Add item you offer" lists only items you own.
 
 [b]Read my trades directly (optional)[/b]
-Turn this on in Settings to see your trades as a list in the app (inbound, outbound, completed, inactive) with item pictures and Rolimons values, and to get new-trade alerts even when the app is closed. To do this, the app keeps an encrypted copy of your Roblox sign-in (.ROBLOSECURITY) on this phone and uses it only to read your trades. It's never sent anywhere except Roblox, and it can't be used to accept, decline or send trades. Turning the option off deletes the copy.
+Turn this on in Settings to see your trades as a list in the app (received, sent, completed, inactive) with item pictures and Rolimons values, and to get alerts for new and accepted trades even when the app is closed. To do this, the app keeps an encrypted copy of your Roblox sign-in (.ROBLOSECURITY) on this phone and uses it only to read your trades. It's never sent anywhere except Roblox, and it can't be used to accept, decline or send trades. Turning the option off deletes the copy.
 
 [b]Notifications[/b]
-You get a notification when posting pauses (daily ad limit, outside your posting hours, no internet), when it resumes, and if it stops. Tap it to see why in History. Once you're signed in to Roblox in the Trades tab, you also get "New trade from ..." when someone sends you a trade (Settings > "Notify me about new Roblox trades"). Without "Read my trades directly", Android only checks while the app is open or recently used. With it, the app checks every couple of minutes in the background and shows "Checking for new Roblox trades" in your status bar.
+You get a notification when posting pauses (daily ad limit, outside your posting hours, no internet), when it resumes, and if it stops. Tap it to see why in History. Once you're signed in to Roblox in the Trades tab, you also get "New trade from ..." when someone sends you a trade (Settings > "Notify me about new Roblox trades"). Without "Read my trades directly", Android only checks while the app is open or recently used. With it, the app checks every couple of minutes in the background (status bar: "Checking for new Roblox trades"), and also tells you "... accepted your trade" when someone accepts a trade you sent. Tap it to see the trade in Completed.
 
 [b]History[/b]
 Every post, pause and problem in plain English. Use Problems to see only what went wrong, and tap an entry to see what to do about it.
@@ -1135,15 +1135,15 @@ class RoliApp(App):
 
     def _on_new_intent(self, intent):
         """A notification was tapped while the app was already open."""
-        tab = droid.opened_tab(intent)
+        tab, kind = droid.opened_tab(intent), droid.opened_trades_list(intent)
         if tab:
-            Clock.schedule_once(lambda *_: self.open_tab_from_notification(tab), 0)
+            Clock.schedule_once(lambda *_: self.open_tab_from_notification(tab, kind), 0)
 
-    def open_tab_from_notification(self, tab: str):
-        if tab == "trades":  # a new-trade alert: show the trades list, not the Roblox page
+    def open_tab_from_notification(self, tab: str, kind: str = "inbound"):
+        if tab == "trades":  # a trade alert: show the trades list (not the Roblox page) it's about
             self.sync_direct_trades()
             trades = self.sm.get_screen("trades")
-            trades.page, trades.kind = False, "inbound"
+            trades.page, trades.kind = False, kind
             trades._loaded_at = 0.0
             if self.sm.current == "trades":
                 trades.apply_view()
@@ -1285,9 +1285,9 @@ class RoliApp(App):
             if days < COOKIE_WARN_DAYS:
                 droid.notify("Rolimons cookie expiring soon",
                              f"Your cookie expires in {max(1, round(days * 24))} hours. Sign in again to keep posting.")
-        tab = droid.opened_tab()  # opened by tapping one of our notifications
+        tab, kind = droid.opened_tab(), droid.opened_trades_list()  # opened by tapping one of our notifications
         if tab:
-            self.open_tab_from_notification(tab)
+            self.open_tab_from_notification(tab, kind)
         screen = droid.launch_extra("screen")
         if screen == "edit" and self.cfg.ads:
             self.edit_ad(0)

@@ -112,9 +112,9 @@ the app never reads it. That page only runs while the app is open, so new-trade 
 you leave the app.
 
 Turn on **Settings → Read my trades directly** to get:
-- your trades as a list in the app (inbound, outbound, completed, inactive), with item pictures,
+- your trades as a list in the app (received, sent, completed, inactive), with item pictures,
   Rolimons values, a give/get total and a warning for projected items; tap a trade to see every item
-- new-trade alerts every couple of minutes, even with the app closed. The status bar shows
+- alerts for new trades, and for trades you sent being accepted, every couple of minutes, even with the app closed. The status bar shows
   *Checking for new Roblox trades* while this runs. It uses a little more battery, like posting does.
 
 How it works, and what changes:

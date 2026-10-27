@@ -395,3 +395,13 @@ class SelfTest:
         notifier.report('[{"id": "../etc", "name": "<b>x</b>"}]')
         yield 1
         self.record("malformed trade reports are ignored", droid.autoclass_notifier().notifiedCount == before + 1)
+        # A trade you sent that later shows up in Completed was accepted.
+        notifier.reportAccepted('[{"id": "2000001", "name": "SelfTestBuyer"}]', '[]')  # remembered as sent
+        notifier.reportAccepted('[]', '[{"id": "2000001", "name": "SelfTestBuyer"}]')
+        ok = yield from self.wait_until(
+            lambda: "SelfTestBuyer accepted your trade" in droid.active_notification_titles(), 10)
+        self.record("an accepted sent trade sends a notification", ok, "; ".join(droid.active_notification_titles()))
+        count = int(droid.autoclass_notifier().notifiedCount)
+        notifier.reportAccepted('[]', '[{"id": "2000001", "name": "SelfTestBuyer"}]')
+        yield 1
+        self.record("an accepted trade doesn't notify twice", droid.autoclass_notifier().notifiedCount == count)

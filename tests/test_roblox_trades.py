@@ -69,3 +69,22 @@ def test_ago():
     assert ago(1000, now=1030) == "just now"
     assert ago(1000, now=1000 + 7200) == "2h ago"
     assert ago(None) == ""
+
+
+def _entry(trade_id: int, give: int, get: int):
+    from roliposter.roblox_trades import Side, TradeDetails, TradeItem, TradeSummary
+    item = lambda value: TradeItem(asset_id=1, name="x", serial=None, rap=value, value=value, projected=False, rare=False)
+    return (TradeSummary(trade_id, 0, "p", None, None, ""),
+            TradeDetails(trade_id, give=Side(items=[item(give)]), get=Side(items=[item(get)])))
+
+
+def test_sort_trades_best_and_worst():
+    from roliposter.roblox_trades import sort_trades
+    small_win = _entry(1, 100, 150)       # +50%
+    big_win = _entry(2, 100_000, 101_000)  # +1%, but more robux
+    loss = _entry(3, 1000, 800)           # -20%
+    pending = (_entry(4, 1, 1)[0], None)  # items not loaded yet
+    entries = [small_win, big_win, loss, pending]
+    assert [e[0].id for e in sort_trades(entries, "best")] == [1, 2, 3, 4]
+    assert [e[0].id for e in sort_trades(entries, "worst")] == [3, 2, 1, 4]
+    assert [e[0].id for e in sort_trades(entries, "newest")] == [1, 2, 3, 4]

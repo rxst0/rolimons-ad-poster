@@ -72,12 +72,12 @@ public class TradeNotifier {
     /** Called by the page with JSON: [{"id": "123", "name": "Builderman"}, ...] newest first. */
     @JavascriptInterface
     public void report(String json) {
-        if (isEnabled()) handle(json);
+        if (isEnabled()) handle(json, false);
     }
 
     /** Called by TradeWatcher (background service), which is only running when it should notify. */
     public void reportDirect(String json) {
-        handle(json);
+        handle(json, true);
         prefs().edit().putBoolean("signed_out_notified", false).commit();
     }
 
@@ -130,7 +130,8 @@ public class TradeNotifier {
                 String name = t.optString("name", "");
                 if (!TRADE_ID.matcher(id).matches()) continue;  // ignore anything that isn't a trade
                 if (!SAFE_NAME.matcher(name).matches()) name = "someone";
-                trades.add(new String[]{id, name});
+                long userId = t.optLong("userId", 0);
+                trades.add(new String[]{id, name, userId > 0 ? String.valueOf(userId) : "0"});
             }
         } catch (Exception e) {
             return null;
@@ -147,7 +148,8 @@ public class TradeNotifier {
                 "New-trade alerts are paused. Open the Trades tab and sign in to Roblox again.");
     }
 
-    private synchronized void handle(String json) {
+    /** direct: from TradeWatcher, which can also read the trade's items for a win/loss summary. */
+    private synchronized void handle(String json, boolean direct) {
         List<String[]> trades = parse(json);
         if (trades == null) return;
         SharedPreferences prefs = prefs();
@@ -157,7 +159,7 @@ public class TradeNotifier {
         for (String[] t : trades) {
             if (seen.contains(t[0])) continue;
             seen.add(t[0]);
-            if (!firstRun && shown++ < MAX_PER_REPORT) notifyTrade(t[0], t[1]);  // first run: remember existing trades, don't notify
+            if (!firstRun && shown++ < MAX_PER_REPORT) notifyTrade(t[0], t[1], Long.parseLong(t[2]), direct);  // first run: remember existing trades, don't notify
         }
         if (seen.size() > MAX_SEEN) {
             List<String> keep = new ArrayList<>();
@@ -167,9 +169,15 @@ public class TradeNotifier {
         prefs.edit().putStringSet("seen", seen).putBoolean("seeded", true).commit();
     }
 
-    private void notifyTrade(String id, String name) {
-        if (show(4000 + (int) (Long.parseLong(id) % 100000), "New trade from " + name, "Tap to view it (view only).",
-                "inbound", 101))
+    private void notifyTrade(String id, String name, long userId, boolean direct) {
+        String title = "New trade from " + name, text = "Tap to view it (view only).";
+        TradeValue.Summary summary = direct ? TradeValue.describe(context, id, userId) : null;
+        if (summary != null) {
+            String pct = summary.percentText();
+            if (!pct.isEmpty()) title += " (" + pct + ")";
+            text = summary.text();
+        }
+        if (show(4000 + (int) (Long.parseLong(id) % 100000), title, text, "inbound", 101))
             notifiedCount++;
     }
 
@@ -192,6 +200,7 @@ public class TradeNotifier {
         Notification notification = new Notification.Builder(context, CHANNEL)
                 .setContentTitle(title)
                 .setContentText(text)
+                .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setSmallIcon(context.getApplicationInfo().icon)
                 .setContentIntent(pending)
                 .setAutoCancel(true)

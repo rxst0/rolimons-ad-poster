@@ -86,7 +86,8 @@ public class TradeWatcher {
             JSONObject t = data.getJSONObject(i);
             JSONObject user = t.optJSONObject("user");
             trades.put(new JSONObject().put("id", String.valueOf(t.optLong("id")))
-                    .put("name", user == null ? "" : user.optString("name", "")));
+                    .put("name", user == null ? "" : user.optString("name", ""))
+                    .put("userId", user == null ? 0 : user.optLong("id")));
         }
         return trades;
     }

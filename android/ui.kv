@@ -1028,6 +1028,35 @@
                     font_size: sp(13)
                     selected: root.kind == 'inactive'
                     on_release: root.set_kind('inactive')
+            BoxLayout:
+                size_hint_y: None
+                height: dp(40)
+                padding: dp(14), 0, dp(14), dp(6)
+                spacing: dp(6)
+                Label:
+                    text: 'Sort'
+                    color: MUTED
+                    font_size: sp(13)
+                    size_hint_x: None
+                    width: dp(36)
+                Chip:
+                    text: 'Newest'
+                    font_size: sp(13)
+                    height: dp(34)
+                    selected: root.sort == 'newest'
+                    on_release: root.set_sort('newest')
+                Chip:
+                    text: 'Best'
+                    font_size: sp(13)
+                    height: dp(34)
+                    selected: root.sort == 'best'
+                    on_release: root.set_sort('best')
+                Chip:
+                    text: 'Worst'
+                    font_size: sp(13)
+                    height: dp(34)
+                    selected: root.sort == 'worst'
+                    on_release: root.set_sort('worst')
             ScrollView:
                 id: trades_scroll
                 do_scroll_x: False

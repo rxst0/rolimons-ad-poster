@@ -47,7 +47,8 @@ from roliposter.items import ItemCatalog, fetch_catalog  # noqa: E402
 from roliposter.logsetup import REDACTOR, setup_logging  # noqa: E402
 from roliposter.paths import cache_dir, config_path, env_path, log_dir, state_path  # noqa: E402
 from roliposter.poster import fmt_duration  # noqa: E402
-from roliposter.roblox_trades import KINDS, KIND_LABELS, ago, parse_details, parse_list, verdict  # noqa: E402
+from roliposter.roblox_trades import (KINDS, KIND_LABELS, ago, parse_details, parse_list, sort_trades,  # noqa: E402
+                                      verdict)
 from roliposter.portfolio import RANGES, PriceLog, fetch_best_prices, fetch_history, totals  # noqa: E402
 from roliposter.state import PostHistory  # noqa: E402
 from roliposter.thumbs import ThumbnailCache  # noqa: E402
@@ -75,10 +76,10 @@ The Trades tab shows Roblox's trades page. Sign in to Roblox there the first tim
 The Items tab shows the limiteds in your Rolimons inventory, their total value and RAP (robux), and a chart of your value over the last day, month, 6 months or year (from your Rolimons player page). When you make an ad, "Add item you offer" lists only items you own.
 
 [b]Read my trades directly (optional)[/b]
-Turn this on in Settings to see your trades as a list in the app (received, sent, completed, inactive) with item pictures and Rolimons values, and to get alerts for new and accepted trades even when the app is closed. To do this, the app keeps an encrypted copy of your Roblox sign-in (.ROBLOSECURITY) on this phone and uses it only to read your trades. It's never sent anywhere except Roblox, and it can't be used to accept, decline or send trades. Turning the option off deletes the copy.
+Turn this on in Settings to see your trades as a list in the app (received, sent, completed, inactive) with item pictures and Rolimons values, sorted newest first or by best or worst deal, and to get alerts for new and accepted trades even when the app is closed. To do this, the app keeps an encrypted copy of your Roblox sign-in (.ROBLOSECURITY) on this phone and uses it only to read your trades. It's never sent anywhere except Roblox, and it can't be used to accept, decline or send trades. Turning the option off deletes the copy.
 
 [b]Notifications[/b]
-You get a notification when posting pauses (daily ad limit, outside your posting hours, no internet), when it resumes, and if it stops. Tap it to see why in History. Once you're signed in to Roblox in the Trades tab, you also get "New trade from ..." when someone sends you a trade (Settings > "Notify me about new Roblox trades"). Without "Read my trades directly", Android only checks while the app is open or recently used. With it, the app checks every couple of minutes in the background (status bar: "Checking for new Roblox trades"), and also tells you "... accepted your trade" when someone accepts a trade you sent. Tap it to see the trade in Completed.
+You get a notification when posting pauses (daily ad limit, outside your posting hours, no internet), when it resumes, and if it stops. Tap it to see why in History. Once you're signed in to Roblox in the Trades tab, you also get "New trade from ..." when someone sends you a trade (Settings > "Notify me about new Roblox trades"). Without "Read my trades directly", Android only checks while the app is open or recently used. With it, the app checks every couple of minutes in the background (status bar: "Checking for new Roblox trades"), and also tells you "... accepted your trade" when someone accepts a trade you sent. New-trade alerts show what you would give and get, and the % gain or loss. Tap it to see the trade in Completed.
 
 [b]History[/b]
 Every post, pause and problem in plain English. Use Problems to see only what went wrong, and tap an entry to see what to do about it.
@@ -235,6 +236,7 @@ class TradesScreen(Screen):
     direct = BooleanProperty(False)   # option on and signed in: the list is available
     page = BooleanProperty(False)     # showing the Roblox page instead of the list
     kind = StringProperty("inbound")
+    sort = StringProperty("newest")   # newest / best / worst (see roblox_trades.sort_trades)
     status_text = StringProperty("")
     more = BooleanProperty(False)
 
@@ -243,6 +245,7 @@ class TradesScreen(Screen):
         self._token = None
         self._cursor = ""
         self._loaded_at = 0.0
+        self._cards: list = []  # TradeCards in Roblox's order (newest first)
         self._raw_details: dict[int, str] = {}  # trade ID -> Roblox's reply (details never change)
 
     @property
@@ -287,12 +290,26 @@ class TradesScreen(Screen):
             self.kind = kind
             self.load()
 
+    def set_sort(self, how: str):
+        self.sort = how
+        self.resort()
+        self.ids.trades_scroll.scroll_y = 1
+
+    def resort(self):
+        """Puts the cards in the chosen order; trades still loading their items stay at the end."""
+        box = self.ids.trades_box
+        ordered = sort_trades([(c, c.details) for c in self._cards], self.sort)
+        box.clear_widgets()
+        for card, _details in ordered:
+            box.add_widget(card)
+
     def load(self, more: bool = False):
         token = object()
         self._token = token
         self._loaded_at = time.time()
         if not more:
             self._cursor = ""
+            self._cards = []
             self.ids.trades_box.clear_widgets()
             self.ids.trades_scroll.scroll_y = 1
         self.status_text = "Loading..."
@@ -357,19 +374,22 @@ class TradesScreen(Screen):
         for trade in trades:
             card = TradeCard(trade)
             card.bind(on_release=lambda c: self.open(c))
+            self._cards.append(card)
             box.add_widget(card)
         self._cursor = next_cursor
         self.more = bool(next_cursor)
         self.status_text = "" if box.children else f"No {KIND_LABELS[self.kind].lower()} trades."
 
     def _card(self, trade_id: int):
-        return next((c for c in self.ids.trades_box.children if c.trade.id == trade_id), None)
+        return next((c for c in self._cards if c.trade.id == trade_id), None)
 
     @mainthread
     def _detailed(self, token, trade_id: int, details):
         card = self._card(trade_id) if self._token is token else None
         if card:
             card.show(details)
+            if self.sort != "newest":
+                self.resort()
             App.get_running_app().request_thumbs([i.asset_id for i in details.give.items + details.get.items])
 
     @mainthread
@@ -379,7 +399,7 @@ class TradesScreen(Screen):
             card.summary, card.tone = "Couldn't load the items. Tap Reload to try again.", "loading"
 
     def refresh_thumbs(self):
-        for card in self.ids.trades_box.children:
+        for card in self._cards:
             if card.details:
                 card.show(card.details)
 

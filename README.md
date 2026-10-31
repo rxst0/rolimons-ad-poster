@@ -113,8 +113,10 @@ you leave the app.
 
 Turn on **Settings → Read my trades directly** to get:
 - your trades as a list in the app (received, sent, completed, inactive), with item pictures,
-  Rolimons values, a give/get total and a warning for projected items; tap a trade to see every item
-- alerts for new trades, and for trades you sent being accepted, every couple of minutes, even with the app closed. The status bar shows
+  Rolimons values, a give/get total and a warning for projected items, sorted newest first or by best or
+  worst deal; tap a trade to see every item
+- alerts for new trades (with what you would give and get, and the % gain or loss), and for trades you
+  sent being accepted, every couple of minutes, even with the app closed. The status bar shows
   *Checking for new Roblox trades* while this runs. It uses a little more battery, like posting does.
 
 How it works, and what changes:
@@ -126,7 +128,8 @@ How it works, and what changes:
   requests: `GET trades.roblox.com/v1/trades/{inbound|outbound|completed|inactive}` and
   `GET trades.roblox.com/v2/trades/{id}`. It can't send any other URL, method or body, so it can't
   accept, decline, counter or send a trade, or change anything else on your account. The cookie isn't
-  passed to the app's Python code, isn't logged, and is only sent to Roblox.
+  passed to the app's Python code, isn't logged, and is only sent to Roblox. (For the gain/loss in alerts it
+  also downloads Rolimons' public item value list, without your sign-in.)
 - If Roblox replaces your cookie in a reply, the app saves the new one and copies it back into the Roblox
   page, so you stay signed in there.
 - **Turning the option off deletes the copy.** *Sign out of Roblox* and uninstalling the app delete it too.

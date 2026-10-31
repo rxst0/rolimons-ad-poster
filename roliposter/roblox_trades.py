@@ -161,3 +161,26 @@ def verdict(details: TradeDetails) -> tuple[str, str]:
         text += f" ({pct:+.0f}%)"
     kind = "even" if details.difference == 0 else "win" if details.difference > 0 else "loss"
     return kind, text
+
+
+SORTS = (("newest", "Newest"), ("best", "Best"), ("worst", "Worst"))
+
+
+def sort_trades(entries: list, how: str) -> list:
+    """entries: [(TradeSummary, TradeDetails or None), ...] newest first, as Roblox lists them.
+
+    "best"/"worst" order by percentage gain (then by amount), so a small trade at +50% ranks above a big
+    one at +1%. Trades whose items haven't loaded yet stay at the end, newest first.
+    """
+    if how not in ("best", "worst"):
+        return list(entries)
+    known = [e for e in entries if e[1] is not None]
+    unknown = [e for e in entries if e[1] is None]
+
+    def gain(entry):
+        details = entry[1]
+        pct = details.percent if details.percent is not None else (float("inf") if details.get_value > 0 else 0.0)
+        return pct, details.difference
+
+    known.sort(key=gain, reverse=how == "best")
+    return known + unknown

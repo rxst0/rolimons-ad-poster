@@ -343,12 +343,14 @@ class SelfTest:
         app.switch_tab("items")
         items = app.sm.get_screen("items")
         ok = yield from self.wait_until(lambda: app.inventory is not None and not items.message.startswith("Loading"), 60)
-        yield from self.wait_until(lambda: app.value_history is not None or app.history_status, 60)
+        yield from self.wait_until(lambda: (app.value_history is not None and app.best_prices is not None)
+                                   or app.history_status, 60)
+        items.refresh()
         yield 2
         self.shot("9-items")
         self.record("items tab shows your items or explains why not",
                     ok and (bool(items.value_text) or bool(items.message)),
-                    f"value {items.value_text!r}, message {items.message!r}, chart {len(items.ids.chart.points)} points, "
+                    f"value {items.value_text!r}, message {items.message!r}, chart {[len(p) for _c, p in items.ids.chart.series]} points, price {items.price_text!r}, "
                     f"note {items.chart_note!r}")
         for key in ("1d", "6m", "1y"):
             items.set_range(key)

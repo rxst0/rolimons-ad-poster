@@ -1123,11 +1123,11 @@
                         font_size: sp(28)
                         bold: True
                     Muted:
-                        text: 'RAP (robux)  [b][color=' + P.TEXT + ']' + root.rap_text + '[/color][/b]   ·   ' + root.count_text if root.rap_text else ''
-                    Txt:
-                        text: root.change_text
-                        color: TONES[root.tone]
-                        bold: True
+                        text: 'RAP (robux)  [b][color=' + P.TEXT + ']' + root.rap_text + '[/color][/b]' if root.rap_text else ''
+                    Muted:
+                        text: 'Current price  [b][color=' + P.TEXT + ']' + root.price_text + '[/color][/b]' if root.price_text else ''
+                    Muted:
+                        text: root.count_text
                     BoxLayout:
                         size_hint_y: None
                         height: dp(40)
@@ -1152,6 +1152,16 @@
                         id: chart
                         size_hint_y: None
                         height: dp(170)
+                    Txt:
+                        text: root.legend_text
+                        font_size: sp(13)
+                        halign: 'center'
+                    Txt:
+                        text: root.change_text
+                        color: TONES[root.tone]
+                        font_size: sp(13)
+                        bold: True
+                        halign: 'center'
                     Muted:
                         text: root.chart_note
                         halign: 'center'
@@ -1165,7 +1175,7 @@
                     size_hint_y: None
                     height: self.minimum_height
                 Muted:
-                    text: 'Values are Rolimons values (RAP when Rolimons has none). History is from your Rolimons player page, one point a day, plus your current total.' if root.value_text else ''
+                    text: 'Value: Rolimons value (RAP when Rolimons has none). RAP: recent average price. Current price: the cheapest copy for sale now, from Rolimons. Value and RAP history come from your Rolimons player page (one point a day); price history is saved by this app once a day.' if root.value_text else ''
                     halign: 'center'
 
 <TradeScreen>:

@@ -22,7 +22,7 @@ from kivy.app import App  # noqa: E402
 from kivy.clock import Clock, mainthread  # noqa: E402
 from kivy.core.window import Window  # noqa: E402
 from kivy.factory import Factory  # noqa: E402
-from kivy.graphics import Color, Line, Rectangle  # noqa: E402
+from kivy.graphics import Color, Ellipse, Line, Rectangle  # noqa: E402
 from kivy.lang import Builder  # noqa: E402
 from kivy.metrics import dp  # noqa: E402
 from kivy.properties import BooleanProperty, ColorProperty, ListProperty, NumericProperty, StringProperty  # noqa: E402
@@ -48,7 +48,7 @@ from roliposter.logsetup import REDACTOR, setup_logging  # noqa: E402
 from roliposter.paths import cache_dir, config_path, env_path, log_dir, state_path  # noqa: E402
 from roliposter.poster import fmt_duration  # noqa: E402
 from roliposter.roblox_trades import KINDS, KIND_LABELS, ago, parse_details, parse_list, verdict  # noqa: E402
-from roliposter.portfolio import RANGES, change, fetch_history, totals  # noqa: E402
+from roliposter.portfolio import RANGES, PriceLog, fetch_best_prices, fetch_history, totals  # noqa: E402
 from roliposter.state import PostHistory  # noqa: E402
 from roliposter.thumbs import ThumbnailCache  # noqa: E402
 from roliposter.updates import check_for_update  # noqa: E402
@@ -585,43 +585,61 @@ class SettingsScreen(Screen):
             app.toast("Settings saved")
 
 
+LINE_COLORS = {"value": P.ACCENT, "rap": "#a78bfa", "price": P.WARN}  # chart lines and their legend
+LINE_NAMES = {"value": "Value", "rap": "RAP", "price": "Price"}
+
+
 class ValueChart(Widget):
-    """A line chart of value over time (points: [(unix time, value), ...])."""
-    points = ListProperty([])
-    line_color = ColorProperty(get_color_from_hex(P.ACCENT))
+    """A line chart of several series on one scale: series = [(hex color, [(unix time, value), ...]), ...]."""
+    series = ListProperty([])
 
     def __init__(self, **kw):
         super().__init__(**kw)
-        self.bind(points=self.redraw, size=self.redraw, pos=self.redraw, line_color=self.redraw)
+        self.bind(series=self.redraw, size=self.redraw, pos=self.redraw)
 
     def redraw(self, *_):
         self.canvas.clear()
-        if len(self.points) < 2 or self.width < 10:
+        lines = [(color, pts) for color, pts in self.series if pts]
+        if not lines or self.width < 10:
             return
-        t0, t1 = self.points[0][0], self.points[-1][0]
-        values = [v for _t, v in self.points]
+        t0 = min(pts[0][0] for _c, pts in lines)
+        t1 = max(pts[-1][0] for _c, pts in lines)
+        values = [v for _c, pts in lines for _t, v in pts]
         lo, hi = min(values), max(values)
         pad = (hi - lo) * 0.08 or max(1, hi * 0.01)
         lo, hi = lo - pad, hi + pad
-        coords = []
-        for t, v in self.points:
-            coords += [self.x + (t - t0) / ((t1 - t0) or 1) * self.width,
-                       self.y + (v - lo) / (hi - lo) * self.height]
         with self.canvas:
             Color(*get_color_from_hex(P.BORDER))
             for frac in (0.0, 0.5, 1.0):  # light guide lines at the bottom, middle and top
                 y = self.y + frac * self.height
                 Line(points=[self.x, y, self.right, y], width=1)
-            Color(*self.line_color)
-            Line(points=coords, width=dp(1.6), joint="round", cap="round")
+            for color, pts in lines:
+                coords = []
+                for t, v in pts:
+                    coords += [self.x + (t - t0) / ((t1 - t0) or 1) * self.width,
+                               self.y + (v - lo) / (hi - lo) * self.height]
+                Color(*get_color_from_hex(color))
+                if len(pts) == 1:  # one reading so far (current price): a dot
+                    Ellipse(pos=(coords[0] - dp(3), coords[1] - dp(3)), size=(dp(6), dp(6)))
+                else:
+                    Line(points=coords, width=dp(1.6), joint="round", cap="round")
+
+
+def short_number(n: int) -> str:
+    for size, unit in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")):
+        if abs(n) >= size:
+            return f"{n / size:.2f}".rstrip("0").rstrip(".") + unit
+    return f"{n:,}"
 
 
 class ItemsScreen(Screen):
-    """What you own on Roblox (your Rolimons inventory), what it's worth, and its value over time."""
+    """What you own on Roblox (your Rolimons inventory), what it's worth, and value, RAP and price over time."""
     value_text = StringProperty("")
     rap_text = StringProperty("")
+    price_text = StringProperty("")
     count_text = StringProperty("")
     change_text = StringProperty("")
+    legend_text = StringProperty("")
     tone = StringProperty("even")
     range = StringProperty("1m")
     chart_note = StringProperty("")
@@ -654,18 +672,24 @@ class ItemsScreen(Screen):
         else:
             self.message = ""
         if inventory is None or inventory.private:
-            self.value_text = self.rap_text = self.count_text = self.change_text = ""
-            self.ids.chart.points = []
-            self.chart_note = ""
+            self.value_text = self.rap_text = self.price_text = self.count_text = ""
+            self.change_text = self.legend_text = self.chart_note = ""
+            self.ids.chart.series = []
             return
-        t = totals(inventory, app.catalog)
+        t = totals(inventory, app.catalog, app.best_prices)
+        if t.price is not None and app.catalog:
+            app.price_log.record(t.price)  # the app's own daily record of what your items cost now
         self.value_text = f"{t.value:,}"
         self.rap_text = f"{t.rap:,}"
+        self.price_text = ("loading..." if t.price is None else
+                           f"{t.price:,}" + (f"  ({t.unpriced} with no seller)" if t.unpriced else ""))
         self.count_text = f"{t.items} item{'s' if t.items != 1 else ''}"
         self.refresh_chart(t)
         ids = []
         for h in t.holdings:
             parts = [f"Value {h.value:,}", f"RAP {h.rap:,}"]
+            if app.best_prices is not None:
+                parts.append(f"Price {h.price:,}" if h.price else "No sellers")
             if h.count > 1:
                 parts.insert(0, f"{h.count} copies")
             if h.on_hold:
@@ -681,23 +705,35 @@ class ItemsScreen(Screen):
         app = App.get_running_app()
         history = app.value_history
         seconds = dict((key, secs) for key, _label, secs in RANGES)[self.range]
-        if history is None:
-            self.ids.chart.points = []
-            self.change_text = ""
-            self.chart_note = app.history_status or "Loading value history..."
-            return
-        part = history.with_now(t.value, t.rap).since(seconds)
-        self.ids.chart.points = list(zip(part.times, part.values))
-        diff, pct = change(part)
         label = dict((key, lbl) for key, lbl, _s in RANGES)[self.range]
-        self.change_text = (f"{diff:+,}" + (f" ({pct:+.1f}%)" if pct is not None else "") + f" in {label}"
-                            if len(part.values) > 1 else "")
+        parts = {}
+        if history is not None:
+            parts["value"] = history.value.with_point(t.value).since(seconds)
+            parts["rap"] = history.rap.with_point(t.rap).since(seconds)
+        if t.price is not None:
+            parts["price"] = app.price_log.series().since(seconds)
+        self.ids.chart.series = [(LINE_COLORS[k], list(zip(s.times, s.values))) for k, s in parts.items()]
+        legend, changes = [], []
+        for key, s in parts.items():
+            if not s.values:
+                continue
+            legend.append(f"[color={LINE_COLORS[key]}][b]—[/b][/color] {LINE_NAMES[key]} {short_number(s.values[-1])}")
+            diff, pct = s.change()
+            if len(s.values) > 1:
+                changes.append(f"{LINE_NAMES[key]} {'+' if diff >= 0 else '-'}{short_number(abs(diff))}"
+                               + (f" ({pct:+.1f}%)" if pct is not None else ""))
+        self.legend_text = "     ".join(legend)
+        self.change_text = (f"In {label}:  " + "   ·   ".join(changes)) if changes else ""
+        diff = parts["value"].change()[0] if "value" in parts else 0
         self.tone = "even" if diff == 0 else "win" if diff > 0 else "loss"
-        self.ids.chart.line_color = get_color_from_hex({"win": P.OK, "loss": P.BAD}.get(self.tone, P.ACCENT))
-        if len(part.values) > 1:
-            self.chart_note = f"Low {min(part.values):,}  ·  High {max(part.values):,}"
-        else:
-            self.chart_note = "Not enough history for this range yet."
+        notes = []
+        if history is None:
+            notes.append(app.history_status or "Loading value and RAP history...")
+        if "price" in parts and len(app.price_log.series().values) < 2:
+            notes.append("Price history starts today: the app saves your items' current price once a day.")
+        elif "price" in parts and len(parts["price"].values) < 2:
+            notes.append("Not enough price history for this range yet.")
+        self.chart_note = "\n".join(notes)
 
 
 class PickerScreen(Screen):
@@ -963,6 +999,8 @@ class RoliApp(App):
         self._update_url = ""
         self._direct_checked_at = 0.0
         self.value_history = None   # roliposter.portfolio.History, from your Rolimons player page
+        self.best_prices = None     # asset ID -> cheapest copy for sale now (Rolimons deals page)
+        self.price_log = PriceLog(HOME / "price_history.json")
         self.history_status = ""
         self._portfolio_at = 0.0
         self._stack: list[str] = []
@@ -1419,28 +1457,36 @@ class RoliApp(App):
             self.sm.get_screen("picker").search()
 
     def load_portfolio(self, force: bool = False):
-        """Items tab: refreshes your inventory and value history (at most every 10 minutes)."""
+        """Items tab: refreshes your inventory, value history and current prices (at most every 10 minutes)."""
         if self.cfg.roblox_user_id <= 0 or (not force and time.time() - self._portfolio_at < 600):
             return
         self._portfolio_at = time.time()
         user_id = self.cfg.roblox_user_id
 
         def work():
+            session = requests.Session()
             self._load_inventory()
             try:
-                history, status = fetch_history(requests.Session(), user_id), ""
+                history, status = fetch_history(session, user_id), ""
             except Exception as e:
                 log.warning("Couldn't load value history: %s", e)
                 history, status = None, "Couldn't load your value history from Rolimons. Tap Reload to try again."
-            self._history_ready(history, status)
+            try:
+                prices = fetch_best_prices(session)
+            except Exception as e:
+                log.warning("Couldn't load current prices: %s", e)
+                prices = None
+            self._history_ready(history, status, prices)
         threading.Thread(target=work, daemon=True).start()
 
     @mainthread
-    def _history_ready(self, history, status: str):
+    def _history_ready(self, history, status: str, prices=None):
         if history is not None or self.value_history is None:
             self.value_history = history
+        if prices is not None:
+            self.best_prices = prices
         self.history_status = status
-        if history is None:
+        if history is None or prices is None:
             self._portfolio_at = 0.0  # try again next time the tab opens
         if self.sm.current == "items":
             self.sm.get_screen("items").refresh()

@@ -4,7 +4,7 @@ import pytest
 
 from roliposter.inventory import Inventory
 from roliposter.items import parse_item_details
-from roliposter.portfolio import PriceLog, Series, parse_best_prices, parse_history, totals
+from roliposter.portfolio import PriceLog, Series, parse_best_prices, parse_history, realistic_price, totals
 
 DAY = 86400
 CATALOG = parse_item_details({"success": True, "items": {
@@ -59,6 +59,16 @@ def test_totals_count_copies_prices_and_sort_by_worth():
     assert [h.item_id for h in t.holdings] == [1001, 1002, 9999]
     assert t.holdings[0].on_hold == 1 and t.holdings[1].projected
     assert totals(inv, CATALOG).price is None  # prices not loaded yet
+
+
+def test_joke_listings_are_not_prices():
+    assert realistic_price(25_000, value=10_000, rap=9_000) == 25_000      # a normal premium
+    assert realistic_price(999_999_999_999, value=3_600_000, rap=107_875) is None
+    assert realistic_price(5_000, value=0, rap=0) is None                   # nothing to compare with
+    assert realistic_price(None, value=10, rap=10) is None
+    inv = Inventory(counts={1001: 1, 1002: 1})
+    t = totals(inv, CATALOG, prices={1001: 9500, 1002: 999_999_999})
+    assert t.price == 9500 and t.unpriced == 1
 
 
 def test_price_log_keeps_one_point_a_day(tmp_path):

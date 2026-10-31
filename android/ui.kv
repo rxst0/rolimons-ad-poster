@@ -1204,7 +1204,7 @@
                     size_hint_y: None
                     height: self.minimum_height
                 Muted:
-                    text: 'Value: Rolimons value (RAP when Rolimons has none). RAP: recent average price. Current price: the cheapest copy for sale now, from Rolimons. Value and RAP history come from your Rolimons player page (one point a day); price history is saved by this app once a day.' if root.value_text else ''
+                    text: 'Value: Rolimons value (RAP when Rolimons has none). RAP: recent average price. Current price: the cheapest copy for sale now, from Rolimons (listings over 3x the value are ignored). Value and RAP history come from your Rolimons player page (one point a day); price history is saved by this app once a day.' if root.value_text else ''
                     halign: 'center'
 
 <TradeScreen>:

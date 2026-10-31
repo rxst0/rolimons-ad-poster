@@ -702,14 +702,14 @@ class ItemsScreen(Screen):
         self.value_text = f"{t.value:,}"
         self.rap_text = f"{t.rap:,}"
         self.price_text = ("loading..." if t.price is None else
-                           f"{t.price:,}" + (f"  ({t.unpriced} with no seller)" if t.unpriced else ""))
+                           f"{t.price:,}" + (f"  ({t.unpriced} with no realistic seller, not counted)" if t.unpriced else ""))
         self.count_text = f"{t.items} item{'s' if t.items != 1 else ''}"
         self.refresh_chart(t)
         ids = []
         for h in t.holdings:
             parts = [f"Value {h.value:,}", f"RAP {h.rap:,}"]
             if app.best_prices is not None:
-                parts.append(f"Price {h.price:,}" if h.price else "No sellers")
+                parts.append(f"Price {h.price:,}" if h.price else "No realistic seller")
             if h.count > 1:
                 parts.insert(0, f"{h.count} copies")
             if h.on_hold:

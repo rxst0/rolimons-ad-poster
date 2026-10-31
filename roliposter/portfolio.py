@@ -23,6 +23,9 @@ RANGES = (("1d", "1D", 86400), ("1m", "1M", 30 * 86400), ("6m", "6M", 182 * 8640
 _CHART = re.compile(r"var\s+chart_data\s*=\s*(\{.*?\})\s*;", re.S)
 _DEALS = re.compile(r"var\s+item_details\s*=\s*(\{.*?\})\s*;", re.S)
 DAY = 86400
+# Sellers sometimes list at joke prices (999,999,999,999); a listing above this many times the item's value
+# (or RAP) isn't a real price, so it's left out of the total like an item nobody is selling.
+MAX_PRICE_RATIO = 3
 
 
 @dataclass
@@ -33,7 +36,7 @@ class Holding:
     on_hold: int
     value: int         # per copy: Rolimons value, or RAP when Rolimons has none
     rap: int           # per copy
-    price: int | None  # per copy: cheapest copy for sale now, None when nobody is selling (or unknown)
+    price: int | None  # per copy: cheapest realistic copy for sale now; None when none (or unknown)
     projected: bool
 
 
@@ -42,7 +45,7 @@ class Totals:
     value: int
     rap: int
     price: int | None  # None until best prices are known
-    unpriced: int      # copies with no seller, left out of price
+    unpriced: int      # copies with no realistic seller, left out of price
     items: int
     holdings: list[Holding]
 
@@ -77,14 +80,23 @@ class History:
     rap: Series
 
 
+def realistic_price(price: int | None, value: int, rap: int) -> int | None:
+    """The listed price, or None when there's none or it's a joke listing (see MAX_PRICE_RATIO)."""
+    reference = max(value, rap)
+    if not price or reference <= 0 or price > reference * MAX_PRICE_RATIO:
+        return None
+    return price
+
+
 def totals(inventory: Inventory, catalog: ItemCatalog | None, prices: dict[int, int] | None = None) -> Totals:
     holdings = []
     for item_id, count in inventory.counts.items():
         info = catalog.get(item_id) if catalog else None
+        value, rap = (info.default_value, info.rap) if info else (0, 0)
         holdings.append(Holding(
             item_id=item_id, name=info.label if info else f"Item {item_id}", count=count,
-            on_hold=inventory.on_hold.get(item_id, 0), value=info.default_value if info else 0,
-            rap=info.rap if info else 0, price=prices.get(item_id) if prices is not None else None,
+            on_hold=inventory.on_hold.get(item_id, 0), value=value, rap=rap,
+            price=realistic_price(prices.get(item_id), value, rap) if prices is not None else None,
             projected=bool(info and info.projected)))
     holdings.sort(key=lambda h: (-h.value * h.count, h.name))
     price = sum(h.price * h.count for h in holdings if h.price) if prices is not None else None

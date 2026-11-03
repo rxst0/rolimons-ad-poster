@@ -129,9 +129,9 @@ How it works, and what changes:
   rules). The Java code that holds the cookie sends a fixed list of read-only requests:
   `GET trades.roblox.com/v1/trades/{inbound|outbound|completed|inactive}` and
   `GET trades.roblox.com/v2/trades/{id}`. The one other request is `POST trades.roblox.com/v1/trades/{id}/accept`,
-  which only the auto-accept code can make (the rest of the app can't reach it). Nothing can decline, counter
-  or send a trade, or change anything else on your account. The cookie isn't
-  passed to the app's Python code, isn't logged, and is only sent to Roblox. (For the gain/loss in alerts it
+  which only the auto-accept code makes, in live mode, after a trade passed your rules. No code in the app
+  declines, counters or sends a trade, or changes anything else on your account. The cookie is only used by
+  that Java code (the app's Python side never asks for it), isn't logged, and is only sent to Roblox. (For the gain/loss in alerts it
   also downloads Rolimons' public item value list, without your sign-in.)
 - If Roblox replaces your cookie in a reply, the app saves the new one and copies it back into the Roblox
   page, so you stay signed in there.

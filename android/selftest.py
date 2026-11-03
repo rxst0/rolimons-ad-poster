@@ -158,11 +158,8 @@ class SelfTest:
                    (("list", "../1/decline"), ("trade", "1/accept"), ("send", "1"))]
         self.record("direct trade reads refuse anything but their fixed requests", refused == [-2, -2, -2],
                     str(refused))
-        # Accepting is only possible from inside the Java package (AutoAccept, live mode); not from here.
-        from jnius import autoclass  # type: ignore
-        api = autoclass("org.roliposter.RobloxApi")
-        self.record("the app's Python side can't accept trades", not hasattr(api, "accept"),
-                    "RobloxApi.accept is reachable" if hasattr(api, "accept") else "")
+        # (That the Python side never accepts trades or reads the sign-in is checked on the PC:
+        # tests/test_android_guards.py.)
         droid.push_auto_accept(app.cfg)
         self.record("auto-accept rules and log are readable", isinstance(droid.auto_accept_log(), list))
         # The trades list calls Java from a worker thread, which can't look up the app's classes itself.

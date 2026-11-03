@@ -51,9 +51,9 @@ public class RobloxApi {
     static final int NEEDS_VERIFICATION = -3;
 
     /**
-     * Accepts one trade. The only request here that changes anything, and package-private on purpose: only
-     * AutoAccept (live mode, after the user's rules passed) calls it; the Python side and the trades page
-     * can't. Returns the HTTP status (200 = accepted), NEEDS_VERIFICATION when Roblox asks for 2-step
+     * Accepts one trade. The only request here that changes anything; only AutoAccept calls it (live mode,
+     * after the user's rules passed). Package-private to keep it out of the way, not as a security boundary
+     * (pyjnius can call non-public methods). Returns the HTTP status (200 = accepted), NEEDS_VERIFICATION when Roblox asks for 2-step
      * verification, 0 without a stored sign-in, -1 on a network error, -2 for a malformed trade ID.
      */
     static int accept(Context context, String tradeId) {

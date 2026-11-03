@@ -15,8 +15,10 @@ import java.util.List;
 /**
  * Auto-accept for new received trades that pass the user's rules (Settings > Auto-accept). Off by default.
  *
- * Test mode only reports what it would do. Live mode accepts through RobloxApi.accept(), which is
- * package-private: nothing outside this package (not the Python side, not the trades page) can accept.
+ * Test mode only reports what it would do. Live mode accepts through RobloxApi.accept(), and this is the
+ * only code that calls it (the trades page still blocks every trade-changing request, see
+ * ViewOnlyWebViewClient). Note: access modifiers aren't a security boundary here, since pyjnius can call
+ * non-public methods; the guarantee is that no other code in the app calls accept().
  * Built-in safety, not configurable: every item you'd get must be on Rolimons; a price rule needs a
  * realistic price for every item; the trade must still be open; at most maxPerDay accepts a day.
  */

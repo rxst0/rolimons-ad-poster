@@ -501,7 +501,7 @@ def _app_ctx():
 
 class RobloxDirect:
     """Read-only Roblox trade requests made in Java with a stored, encrypted copy of the Roblox sign-in
-    (org.roliposter.RobloxSession / RobloxApi). Python only ever sees the replies, never the cookie.
+    (org.roliposter.RobloxSession / RobloxApi). Python only ever asks for the replies, never for the cookie.
 
     fetch() blocks: call it from a worker thread (pyjnius detaches Python threads from Java when they end),
     after prime_java() has run on the main thread.

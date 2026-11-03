@@ -21,9 +21,10 @@ import javax.crypto.spec.GCMParameterSpec;
  * trades tab's WebView, so RobloxApi can read trades without the page, including from the background
  * service (a separate process, which can't see the WebView's cookies).
  *
- * The copy is encrypted with an Android Keystore key that never leaves the phone. Only this package
- * can read it: get() is package-private, so the Python side can't. When the option is off nothing is
- * captured, and turning it off deletes the copy (clear()).
+ * The copy is encrypted with an Android Keystore key that never leaves the phone. Only RobloxApi uses
+ * it; the Python side never asks for it (get() is package-private to keep it out of the way, though that
+ * isn't a security boundary: everything runs in the app's own process). When the option is off nothing
+ * is captured, and turning it off deletes the copy (clear()).
  */
 public class RobloxSession {
     static final String COOKIE = ".ROBLOSECURITY";

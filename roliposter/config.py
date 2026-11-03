@@ -42,6 +42,19 @@ class PostingHours:
 
 
 @dataclass
+class AutoAcceptSettings:
+    """Android, with "Read my trades directly": accept new received trades that pass every rule set here.
+    "test" only reports what it would accept. A gain left as None isn't checked."""
+    enabled: bool = False
+    mode: str = "test"                      # "test" or "live"
+    min_value_gain: float | None = 10.0     # % gain in Rolimons value (RAP when an item has no value)
+    min_rap_gain: float | None = None       # % gain in RAP
+    min_price_gain: float | None = None     # % gain in current best price
+    block_projected: bool = True            # never accept when you'd get a projected item
+    max_per_day: int = 5                    # live mode: at most this many auto-accepts a day
+
+
+@dataclass
 class AppSettings:
     close_to_tray: bool = True        # keep posting in the tray when the window is closed
     auto_start_posting: bool = False  # start posting as soon as the app opens
@@ -65,6 +78,7 @@ class Config:
     skip_unowned_items: bool = True
     posting_hours: PostingHours = field(default_factory=PostingHours)
     app: AppSettings = field(default_factory=AppSettings)
+    auto_accept: AutoAcceptSettings = field(default_factory=AutoAcceptSettings)
     ads: list[Ad] = field(default_factory=list)
 
     def enabled_ads(self) -> list[Ad]:
@@ -78,6 +92,10 @@ def _int_list(value, where: str) -> list[int]:
         return [int(v) for v in value]
     except (TypeError, ValueError):
         raise ConfigError(f"{where} contains a non-numeric item ID: {value!r}") from None
+
+
+def _optional_float(value) -> float | None:
+    return None if value is None or value == "" else float(value)
 
 
 def config_from_dict(data: dict) -> Config:
@@ -97,6 +115,7 @@ def config_from_dict(data: dict) -> Config:
         vm = data.get("value_mode", {}) or {}
         ph = data.get("posting_hours", {}) or {}
         app = data.get("app", {}) or {}
+        aa = data.get("auto_accept", {}) or {}
         return Config(
             roblox_user_id=int(data.get("roblox_user_id", 0) or 0),
             rotation=str(data.get("rotation", "sequential")).lower(),
@@ -123,6 +142,15 @@ def config_from_dict(data: dict) -> Config:
                 direct_trades=bool(app.get("direct_trades", False)),
                 check_updates=bool(app.get("check_updates", True)),
                 rovalra=bool(app.get("rovalra", True)),
+            ),
+            auto_accept=AutoAcceptSettings(
+                enabled=bool(aa.get("enabled", False)),
+                mode=str(aa.get("mode", "test")).lower(),
+                min_value_gain=_optional_float(aa.get("min_value_gain", 10.0)),
+                min_rap_gain=_optional_float(aa.get("min_rap_gain")),
+                min_price_gain=_optional_float(aa.get("min_price_gain")),
+                block_projected=bool(aa.get("block_projected", True)),
+                max_per_day=int(aa.get("max_per_day", 5)),
             ),
             ads=ads,
         )
@@ -167,6 +195,16 @@ def validate_config(cfg: Config) -> list[str]:
             errors.append("posting_hours start and end can't be the same time.")
     if cfg.value_mode.strategy not in ("warn", "pick"):
         errors.append('value_mode.strategy must be "warn" or "pick".')
+    aa = cfg.auto_accept
+    if aa.mode not in ("test", "live"):
+        errors.append('auto_accept.mode must be "test" or "live".')
+    if not 0 <= aa.max_per_day <= 50:
+        errors.append("auto_accept.max_per_day must be between 0 and 50.")
+    for label, gain in (("value", aa.min_value_gain), ("RAP", aa.min_rap_gain), ("price", aa.min_price_gain)):
+        if gain is not None and not -100 <= gain <= 1000:
+            errors.append(f"Auto-accept minimum {label} gain must be between -100% and 1000%.")
+    if aa.enabled and aa.min_value_gain is None and aa.min_rap_gain is None and aa.min_price_gain is None:
+        errors.append("Auto-accept needs at least one minimum gain (value, RAP or price).")
     if not cfg.ads:
         errors.append("No ads defined.")
     elif not cfg.enabled_ads():

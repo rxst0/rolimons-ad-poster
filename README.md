@@ -4,9 +4,10 @@ Automatically posts your [Rolimons](https://www.rolimons.com/trades) trade ads e
 rotating through ads you set up. It runs as a simple app on **Windows** and **Android**, so you don't need Python.
 Fully open source, with no servers involved: each device posts on its own.
 
-> **View-only for trades:** it posts Rolimons trade ads and can *show* your Roblox trades. It can't accept,
-> decline or send Roblox trades, and it never asks you to type or paste your Roblox password or
-> `.ROBLOSECURITY` cookie. If any tool asks you to paste those, it's a scam.
+> **Trades are view-only unless you turn on auto-accept:** it posts Rolimons trade ads and can *show* your
+> Roblox trades. It never declines, counters or sends Roblox trades. It only accepts one if you turn on
+> [auto-accept](#auto-accept-android) in live mode and the trade passes your rules. It never asks you to
+> type or paste your Roblox password or `.ROBLOSECURITY` cookie. If any tool asks you to paste those, it's a scam.
 > On Android, the optional **Read my trades directly** setting keeps an encrypted copy of your Roblox sign-in
 > on your phone so the app can read your trades ([details below](#reading-your-trades-directly-android)).
 > It's off by default.
@@ -124,10 +125,12 @@ How it works, and what changes:
   copies your `.ROBLOSECURITY` cookie and stores it encrypted with an Android Keystore key, which never
   leaves the phone. The background service runs in a separate process that can't see the page's
   sign-in, so it needs this copy.
-- **It's only used to read trades.** The Java code that holds the cookie sends a fixed list of read-only
-  requests: `GET trades.roblox.com/v1/trades/{inbound|outbound|completed|inactive}` and
-  `GET trades.roblox.com/v2/trades/{id}`. It can't send any other URL, method or body, so it can't
-  accept, decline, counter or send a trade, or change anything else on your account. The cookie isn't
+- **It's used to read trades** (and, only if you turn on live auto-accept, to accept the ones that pass your
+  rules). The Java code that holds the cookie sends a fixed list of read-only requests:
+  `GET trades.roblox.com/v1/trades/{inbound|outbound|completed|inactive}` and
+  `GET trades.roblox.com/v2/trades/{id}`. The one other request is `POST trades.roblox.com/v1/trades/{id}/accept`,
+  which only the auto-accept code can make (the rest of the app can't reach it). Nothing can decline, counter
+  or send a trade, or change anything else on your account. The cookie isn't
   passed to the app's Python code, isn't logged, and is only sent to Roblox. (For the gain/loss in alerts it
   also downloads Rolimons' public item value list, without your sign-in.)
 - If Roblox replaces your cookie in a reply, the app saves the new one and copies it back into the Roblox
@@ -136,6 +139,28 @@ How it works, and what changes:
   Android's cloud backup is turned off for this app, so the copy isn't uploaded.
 - Anyone with your unlocked, rooted phone could in principle get the cookie, just like from any browser
   on that phone. If you'd rather not take that risk, leave the option off.
+
+## Auto-accept (Android)
+
+Off by default, and it needs **Read my trades directly**. In **Settings → Auto-accept trades** you set rules,
+and each *new* received trade is checked against all of them:
+- **Minimum value gain %** (Rolimons value; RAP when an item has none), **minimum RAP gain %** and
+  **minimum price gain %** (cheapest copy for sale now). Leave one empty to not check it.
+- **Never accept trades with projected items** (on by default).
+- **Max auto-accepts per day** (live mode).
+
+Always skipped, whatever the rules say: trades with items Rolimons doesn't track, trades that are no longer
+open, and a price rule when an item has no realistic price (see the Items tab).
+
+**Test mode** (the default) accepts nothing: the new-trade notification says *"Would auto-accept"* or
+*"Not auto-accepted: value gain +4% is below +10%"*, and **Show recent decisions** lists them. Watch it for a
+few days before switching to **Live**, which accepts on Roblox and tells you *"Auto-accepted trade from X"*.
+
+Be aware:
+- Accepted trades can't be undone. Scammers inflate RAP and prices with fake sales; the value rule and
+  blocking projected items are the best protection.
+- Roblox's terms don't allow automating your account. Use it at your own risk.
+- When Roblox asks for 2-step verification to accept, the trade is skipped and the notification says so.
 
 ## Settings
 

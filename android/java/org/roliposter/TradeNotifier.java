@@ -177,6 +177,12 @@ public class TradeNotifier {
             if (!pct.isEmpty()) title += " (" + pct + ")";
             text = summary.text();
         }
+        AutoAccept.Decision decision = direct ? AutoAccept.handle(context, id, name, summary) : null;
+        if (decision != null) {
+            if (decision.accepted) title = "Auto-accepted " + title.replaceFirst("^New t", "t");
+            else if (decision.pass && decision.line.startsWith("Would")) title = "Would auto-accept: " + title;
+            text = text + "\n" + decision.line;
+        }
         if (show(4000 + (int) (Long.parseLong(id) % 100000), title, text, "inbound", 101))
             notifiedCount++;
     }

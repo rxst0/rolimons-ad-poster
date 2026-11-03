@@ -656,6 +656,54 @@
                     FlatButton:
                         text: 'Sign out of Roblox'
                         on_release: root.sign_out_roblox()
+                Card:
+                    Title:
+                        text: 'Auto-accept trades'
+                    Muted:
+                        text: 'Needs "Read my trades directly". Checks each new received trade against your rules. Test mode only tells you what it would accept; Live accepts on Roblox. Leave a gain empty to not check it.'
+                    SettingRow:
+                        id: aa_on
+                        text: 'Auto-accept trades that pass my rules'
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(40)
+                        spacing: dp(8)
+                        Chip:
+                            id: aa_test
+                            text: 'Test mode'
+                            on_release: root.set_aa_mode('test')
+                        Chip:
+                            id: aa_live
+                            text: 'Live'
+                            on_release: root.set_aa_mode('live')
+                    FieldLabel:
+                        text: 'MINIMUM VALUE GAIN (%)'
+                    Field:
+                        id: aa_value
+                        hint_text: 'e.g. 10'
+                    FieldLabel:
+                        text: 'MINIMUM RAP GAIN (%)'
+                    Field:
+                        id: aa_rap
+                        hint_text: 'empty = not checked'
+                    FieldLabel:
+                        text: 'MINIMUM PRICE GAIN (%)'
+                    Field:
+                        id: aa_price
+                        hint_text: 'empty = not checked'
+                    SettingRow:
+                        id: aa_projected
+                        text: 'Never accept trades with projected items'
+                    FieldLabel:
+                        text: 'MAX AUTO-ACCEPTS PER DAY (LIVE)'
+                    Field:
+                        id: aa_max
+                        input_filter: 'int'
+                    Muted:
+                        text: 'Always skipped: items Rolimons doesn\'t track, trades that are no longer open, and a price rule when an item has no realistic price.'
+                    FlatButton:
+                        text: 'Show recent decisions'
+                        on_release: root.show_aa_log()
                 AccentButton:
                     text: 'Save settings'
                     on_release: root.save()

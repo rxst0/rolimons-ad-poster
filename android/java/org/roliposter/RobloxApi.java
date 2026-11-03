@@ -14,11 +14,12 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * Read-only Roblox requests made with the stored sign-in (see RobloxSession). Only a fixed set of GET
- * requests can be made: there is no way to ask for any other URL, method or body, so nothing here can
- * accept, decline, send or change a trade, or touch anything else on the account.
+ * Roblox requests made with the stored sign-in (see RobloxSession). Reads are a fixed set of GET requests
+ * (fetch): there is no way to ask for any other URL, method or body. The one exception is accept(), used
+ * only by AutoAccept in live mode; nothing here can decline, counter or send a trade, or touch anything
+ * else on the account.
  *
- * Callers get {"status": <HTTP status>, "body": "<reply text>"}; status is 0 when there's no stored
+ * fetch() returns {"status": <HTTP status>, "body": "<reply text>"}; status is 0 when there's no stored
  * sign-in, -1 for a network error and -2 for a request that isn't allowed. Never call on the UI thread.
  */
 public class RobloxApi {
@@ -45,6 +46,59 @@ public class RobloxApi {
             return "https://trades.roblox.com/v2/trades/" + arg;
         }
         return null;
+    }
+
+    static final int NEEDS_VERIFICATION = -3;
+
+    /**
+     * Accepts one trade. The only request here that changes anything, and package-private on purpose: only
+     * AutoAccept (live mode, after the user's rules passed) calls it; the Python side and the trades page
+     * can't. Returns the HTTP status (200 = accepted), NEEDS_VERIFICATION when Roblox asks for 2-step
+     * verification, 0 without a stored sign-in, -1 on a network error, -2 for a malformed trade ID.
+     */
+    static int accept(Context context, String tradeId) {
+        if (tradeId == null || !TRADE_ID.matcher(tradeId).matches()) return -2;
+        String cookie = RobloxSession.get(context);
+        if (cookie == null) return 0;
+        String csrf = "";
+        for (int attempt = 0; attempt < 2; attempt++) {  // the first reply hands out the CSRF token
+            HttpURLConnection conn = null;
+            try {
+                conn = (HttpURLConnection) new URL("https://trades.roblox.com/v1/trades/" + tradeId + "/accept")
+                        .openConnection();
+                conn.setRequestMethod("POST");
+                conn.setInstanceFollowRedirects(false);
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(20000);
+                conn.setDoOutput(true);
+                conn.setRequestProperty("Cookie", RobloxSession.COOKIE + "=" + cookie);
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setRequestProperty("Accept", "application/json");
+                if (!csrf.isEmpty()) conn.setRequestProperty("x-csrf-token", csrf);
+                String agent = System.getProperty("http.agent");
+                if (agent != null) conn.setRequestProperty("User-Agent", agent);
+                conn.getOutputStream().write("{}".getBytes(StandardCharsets.UTF_8));
+                int status = conn.getResponseCode();
+                for (Map.Entry<String, List<String>> header : conn.getHeaderFields().entrySet()) {
+                    if (header.getKey() == null || !header.getKey().equalsIgnoreCase("Set-Cookie")) continue;
+                    for (String value : header.getValue()) {
+                        if (value.trim().startsWith(RobloxSession.COOKIE + "=")) RobloxSession.rotated(context, value.trim());
+                    }
+                }
+                String token = conn.getHeaderField("x-csrf-token");
+                if (status == 403 && token != null && csrf.isEmpty()) {
+                    csrf = token;
+                    continue;
+                }
+                if (conn.getHeaderField("rblx-challenge-id") != null) return NEEDS_VERIFICATION;
+                return status;
+            } catch (Exception e) {
+                return -1;
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }
+        return 403;
     }
 
     static String get(Context context, String url) {

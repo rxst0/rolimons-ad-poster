@@ -76,7 +76,10 @@ The Trades tab shows Roblox's trades page. Sign in to Roblox there the first tim
 The Items tab shows the limiteds in your Rolimons inventory, their total value and RAP (robux), and a chart of your value over the last day, month, 6 months or year (from your Rolimons player page). When you make an ad, "Add item you offer" lists only items you own.
 
 [b]Read my trades directly (optional)[/b]
-Turn this on in Settings to see your trades as a list in the app (received, sent, completed, inactive) with item pictures and Rolimons values, sorted newest first or by best or worst deal, and to get alerts for new and accepted trades even when the app is closed. To do this, the app keeps an encrypted copy of your Roblox sign-in (.ROBLOSECURITY) on this phone and uses it only to read your trades. It's never sent anywhere except Roblox, and it can't be used to accept, decline or send trades. Turning the option off deletes the copy.
+Turn this on in Settings to see your trades as a list in the app (received, sent, completed, inactive) with item pictures and Rolimons values, sorted newest first or by best or worst deal, and to get alerts for new and accepted trades even when the app is closed. To do this, the app keeps an encrypted copy of your Roblox sign-in (.ROBLOSECURITY) on this phone and uses it only to read your trades. It's never sent anywhere except Roblox. It can't be used to decline or send trades, and it only accepts trades if you turn on live auto-accept. Turning the option off deletes the copy.
+
+[b]Auto-accept (optional)[/b]
+Settings > Auto-accept trades checks each new received trade against your rules: minimum value, RAP and price gain, and no projected items. Test mode (the default) only tells you what it would accept. Live accepts on Roblox, up to your daily limit. Accepted trades can't be undone, and Roblox's rules don't allow automating your account, so watch test mode first.
 
 [b]Notifications[/b]
 You get a notification when posting pauses (daily ad limit, outside your posting hours, no internet), when it resumes, and if it stops. Tap it to see why in History. Once you're signed in to Roblox in the Trades tab, you also get "New trade from ..." when someone sends you a trade (Settings > "Notify me about new Roblox trades"). Without "Read my trades directly", Android only checks while the app is open or recently used. With it, the app checks every couple of minutes in the background (status bar: "Checking for new Roblox trades"), and also tells you "... accepted your trade" when someone accepts a trade you sent. New-trade alerts show what you would give and get, and the % gain or loss. Tap it to see the trade in Completed.
@@ -90,6 +93,12 @@ This app never asks you to type or paste your Roblox password or .ROBLOSECURITY 
 Run posting on one device at a time: two devices posting for the same account hit each other's cooldown.
 """
 TABS = ("home", "trades", "items", "history", "settings", "help")
+LIVE_AUTO_ACCEPT_TEXT = ("The app will accept new received trades on Roblox, by itself, when they pass every rule "
+                         "you set. Accepted trades can't be undone.\n\n"
+                         "- Scammers inflate RAP and prices; the value rule and blocking projected items protect "
+                         "you best.\n- Roblox's rules don't allow automating your account; use this at your own "
+                         "risk.\n- If Roblox asks for 2-step verification, the trade is skipped and you get a "
+                         "notification.")
 DIRECT_TRADES_TEXT = ("Your trades now show as a list in the Trades tab, and new-trade alerts work with the app "
                       "closed.\n\nThe app keeps an encrypted copy of your Roblox sign-in on this phone and uses it "
                       "only to read your trades. Turn this off any time to delete the copy.\n\n"
@@ -539,7 +548,34 @@ class SettingsScreen(Screen):
         ids.trade_notify_on.active = c.app.trade_notifications
         ids.direct_trades.active = c.app.direct_trades
         ids.updates_on.active = c.app.check_updates
+        aa = c.auto_accept
+        ids.aa_on.active = aa.enabled
+        self.set_aa_mode(aa.mode)
+        for field_id, gain in (("aa_value", aa.min_value_gain), ("aa_rap", aa.min_rap_gain),
+                               ("aa_price", aa.min_price_gain)):
+            ids[field_id].text = "" if gain is None else f"{gain:g}"
+        ids.aa_projected.active = aa.block_projected
+        ids.aa_max.text = str(aa.max_per_day)
         self.refresh_battery()
+
+    def set_aa_mode(self, mode: str):
+        self._aa_mode = mode
+        self.ids.aa_test.selected = mode == "test"
+        self.ids.aa_live.selected = mode == "live"
+
+    def show_aa_log(self):
+        app = App.get_running_app()
+        entries = droid.auto_accept_log()[:12]
+        if not entries:
+            return app.notice("Auto-accept decisions", "Nothing yet. New received trades show up here once "
+                                                       "auto-accept is on.")
+        lines = []
+        for e in entries:
+            when = time.strftime("%d %b %H:%M", time.localtime(e.get("t", 0)))
+            mode = "LIVE" if e.get("live") else "test"
+            pct = f" ({e['pct']})" if e.get("pct") else ""
+            lines.append(f"[b]{when}  {e.get('partner', '?')}{pct}[/b]  [{mode}]\n{e.get('result', '')}")
+        app.notice("Auto-accept decisions", "\n\n".join(lines))
 
     def refresh_battery(self):
         ignoring = droid.ignoring_battery_optimizations()
@@ -573,6 +609,8 @@ class SettingsScreen(Screen):
             jmin, jmax = float(ids.jmin.text or 0), float(ids.jmax.text or 0)
             max_ads = int(ids.max_ads.text or 0)
             overpay = float(ids.overpay.text or 0)
+            aa_gains = [float(ids[f].text) if ids[f].text.strip() else None for f in ("aa_value", "aa_rap", "aa_price")]
+            aa_max = int(ids.aa_max.text or 0)
         except ValueError:
             return app.notice("Settings", "Please enter numbers only.")
         c = copy.deepcopy(app.cfg)
@@ -590,10 +628,26 @@ class SettingsScreen(Screen):
         c.app.trade_notifications = ids.trade_notify_on.active
         c.app.direct_trades = ids.direct_trades.active
         c.app.check_updates = ids.updates_on.active
+        aa = c.auto_accept
+        aa.enabled = ids.aa_on.active
+        aa.mode = self._aa_mode
+        aa.min_value_gain, aa.min_rap_gain, aa.min_price_gain = aa_gains
+        aa.block_projected = ids.aa_projected.active
+        aa.max_per_day = aa_max
+        if aa.enabled and not c.app.direct_trades:
+            return app.notice("Auto-accept", 'Auto-accept needs "Read my trades directly" turned on.')
+        going_live = aa.enabled and aa.mode == "live" and not (app.cfg.auto_accept.enabled
+                                                               and app.cfg.auto_accept.mode == "live")
         problems = [e for e in validate_config(c) if not e.startswith(("No ads", "All ads", "roblox_user_id"))
                     and not e.startswith("Ad '")]
         if problems:
             return app.notice("Check your settings", "\n".join(problems))
+        if going_live and not getattr(self, "_live_confirmed", False):
+            def confirm():
+                self._live_confirmed = True
+                self.save()
+            return app.notice("Turn on live auto-accept?", LIVE_AUTO_ACCEPT_TEXT, (("Cancel", None), ("Turn on", confirm)))
+        self._live_confirmed = False
         turned_on = c.app.direct_trades and not app.cfg.app.direct_trades
         app.cfg = c
         app.persist()
@@ -1158,6 +1212,7 @@ class RoliApp(App):
         enabled = self.cfg.app.notifications and self.cfg.app.trade_notifications
         direct = self.cfg.app.direct_trades and droid.RobloxDirect.available
         droid.RobloxDirect.set_enabled(direct)  # off deletes the stored sign-in
+        droid.push_auto_accept(self.cfg)
         droid.set_trade_notifications(enabled and not direct)
         if enabled and not direct and self.trades_view:
             self.trades_view.preload(*self._trades_area())

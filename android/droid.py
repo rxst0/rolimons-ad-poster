@@ -469,7 +469,7 @@ def sign_out_web() -> None:
 # Android's system class loader, which doesn't know them. So they're looked up once by prime_java() on
 # the main thread and reused from any thread.
 APP_CLASSES = ("org.roliposter.RobloxSession", "org.roliposter.RobloxApi", "org.roliposter.TradeWatcher",
-               "org.roliposter.ForegroundText")
+               "org.roliposter.ForegroundText", "org.roliposter.AutoAccept")
 _classes: dict = {}
 _app_context = None
 
@@ -552,9 +552,33 @@ class RobloxDirect:
 
 
 def trade_watch_wanted(cfg) -> bool:
-    """Should the background service check for new trades? Only with "Read my trades directly" on."""
-    return (IS_ANDROID and cfg.app.direct_trades and cfg.app.notifications and cfg.app.trade_notifications
+    """Should the background service check for new trades? Only with "Read my trades directly" on, for
+    new-trade alerts or auto-accept."""
+    alerts = cfg.app.notifications and cfg.app.trade_notifications
+    return (IS_ANDROID and cfg.app.direct_trades and (alerts or cfg.auto_accept.enabled)
             and RobloxDirect.signed_in())
+
+
+def push_auto_accept(cfg) -> None:
+    """Hands the auto-accept rules to org.roliposter.AutoAccept (it runs in the background service)."""
+    if not IS_ANDROID:
+        return
+    import json
+    from dataclasses import asdict
+    rules = asdict(cfg.auto_accept)
+    rules["enabled"] = bool(rules["enabled"] and cfg.app.direct_trades)
+    _jclass("org.roliposter.AutoAccept").setRules(_app_ctx(), json.dumps(rules))
+
+
+def auto_accept_log() -> list[dict]:
+    """Auto-accept's latest decisions, newest first."""
+    if not IS_ANDROID:
+        return []
+    import json
+    try:
+        return json.loads(str(_jclass("org.roliposter.AutoAccept").recentLog(_app_ctx())))
+    except Exception:
+        return []
 
 
 def start_trade_watcher(on: bool, interval_seconds: int = 90) -> None:

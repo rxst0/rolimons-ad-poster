@@ -724,9 +724,14 @@ class ItemsScreen(Screen):
         app.load_portfolio()
         self.refresh()
 
+    MAX_ROWS = 150  # the most valuable items get a row; big inventories would take ages to draw in full
+
     def set_range(self, key: str):
         self.range = key
-        self.refresh()
+        if getattr(self, "_totals", None) is not None:
+            self.refresh_chart(self._totals)  # the item list doesn't change with the chart's range
+        else:
+            self.refresh()
 
     def reload(self):
         App.get_running_app().load_portfolio(force=True)
@@ -746,11 +751,13 @@ class ItemsScreen(Screen):
         else:
             self.message = ""
         if inventory is None or inventory.private:
+            self._totals = None
             self.value_text = self.rap_text = self.price_text = self.count_text = ""
             self.change_text = self.legend_text = self.chart_note = ""
             self.ids.chart.series = []
             return
         t = totals(inventory, app.catalog, app.best_prices)
+        self._totals = t
         if t.price is not None and app.catalog:
             app.price_log.record(t.price)  # the app's own daily record of what your items cost now
         self.value_text = f"{t.value:,}"
@@ -760,7 +767,7 @@ class ItemsScreen(Screen):
         self.count_text = f"{t.items} item{'s' if t.items != 1 else ''}"
         self.refresh_chart(t)
         ids = []
-        for h in t.holdings:
+        for h in t.holdings[:self.MAX_ROWS]:
             parts = [f"Value {h.value:,}", f"RAP {h.rap:,}"]
             if app.best_prices is not None:
                 parts.append(f"Price {h.price:,}" if h.price else "No realistic seller")
@@ -773,6 +780,9 @@ class ItemsScreen(Screen):
             box.add_widget(ItemRow(thumb=app.thumb_source(h.item_id), name=h.name, value="  ·  ".join(parts),
                                    warn=h.projected))
             ids.append(h.item_id)
+        hidden = len(t.holdings) - self.MAX_ROWS
+        if hidden > 0:
+            box.add_widget(Factory.Muted(text=f"and {hidden:,} more items (lower value)", halign="center"))
         app.request_thumbs(ids)
 
     def refresh_chart(self, t):

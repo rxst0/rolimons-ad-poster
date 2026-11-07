@@ -1,5 +1,6 @@
 """Rolimons Ad Poster - Android app (Kivy). Also runs on a PC for previewing: python android/main.py"""
 import copy
+import json
 import logging
 import os
 import sys
@@ -24,7 +25,7 @@ from kivy.core.window import Window  # noqa: E402
 from kivy.factory import Factory  # noqa: E402
 from kivy.graphics import Color, Ellipse, Line, Rectangle  # noqa: E402
 from kivy.lang import Builder  # noqa: E402
-from kivy.metrics import dp  # noqa: E402
+from kivy.metrics import dp, sp  # noqa: E402
 from kivy.properties import BooleanProperty, ColorProperty, ListProperty, NumericProperty, StringProperty  # noqa: E402
 from kivy.uix.behaviors import ButtonBehavior  # noqa: E402
 from kivy.uix.boxlayout import BoxLayout  # noqa: E402
@@ -50,6 +51,7 @@ from roliposter.poster import fmt_duration  # noqa: E402
 from roliposter.roblox_trades import (KINDS, KIND_LABELS, ago, parse_details, parse_list, sort_trades,  # noqa: E402
                                       verdict)
 from roliposter.portfolio import RANGES, PriceLog, fetch_best_prices, fetch_history, totals  # noqa: E402
+from roliposter.ai_advisor import PROVIDERS, Advice, AdvisorError, ask, build_context, check  # noqa: E402
 from roliposter.state import PostHistory  # noqa: E402
 from roliposter.thumbs import ThumbnailCache  # noqa: E402
 from roliposter.updates import check_for_update  # noqa: E402
@@ -78,8 +80,11 @@ The Items tab shows the limiteds in your Rolimons inventory, their total value a
 [b]Read my trades directly (optional)[/b]
 Turn this on in Settings to see your trades as a list in the app (received, sent, completed, inactive) with item pictures and Rolimons values, sorted newest first or by best or worst deal, and to get alerts for new and accepted trades even when the app is closed. To do this, the app keeps an encrypted copy of your Roblox sign-in (.ROBLOSECURITY) on this phone and uses it only to read your trades. It's never sent anywhere except Roblox. It can't be used to decline or send trades, and it only accepts trades if you turn on live auto-accept. Turning the option off deletes the copy.
 
+[b]AI recommendations (optional)[/b]
+Turn on Settings > AI trade recommendations, pick Claude or ChatGPT and paste your own API key from that company. On the AI tab, tap Get recommendations: the AI looks at your items and the Rolimons market (value, RAP, demand, trend, projected/hyped/rare, current prices, your value history) and suggests upgrades, downgrades and items to hold. It only runs when you tap the button, and each run costs a few cents on your API account. Your items and market data go to the AI company; your Roblox and Rolimons sign-ins never do. Suggestions can be wrong: check every trade yourself.
+
 [b]Auto-accept (optional)[/b]
-Settings > Auto-accept trades checks each new received trade against your rules: minimum value, RAP and price gain, and no projected items. Test mode (the default) only tells you what it would accept. Live accepts on Roblox, up to your daily limit. Accepted trades can't be undone, and Roblox's rules don't allow automating your account, so watch test mode first.
+The Auto tab checks each new received trade against your rules: minimum value, RAP and price gain, and no projected items. Test mode (the default) only tells you what it would accept. Live accepts on Roblox, up to your daily limit. Accepted trades can't be undone, and Roblox's rules don't allow automating your account, so watch test mode first.
 
 [b]Notifications[/b]
 You get a notification when posting pauses (daily ad limit, outside your posting hours, no internet), when it resumes, and if it stops. Tap it to see why in History. Once you're signed in to Roblox in the Trades tab, you also get "New trade from ..." when someone sends you a trade (Settings > "Notify me about new Roblox trades"). Without "Read my trades directly", Android only checks while the app is open or recently used. With it, the app checks every couple of minutes in the background (status bar: "Checking for new Roblox trades"), and also tells you "... accepted your trade" when someone accepts a trade you sent. New-trade alerts show what you would give and get, and the % gain or loss. Tap it to see the trade in Completed.
@@ -92,7 +97,7 @@ This app never asks you to type or paste your Roblox password or .ROBLOSECURITY 
 
 Run posting on one device at a time: two devices posting for the same account hit each other's cooldown.
 """
-TABS = ("home", "trades", "items", "history", "settings", "help")
+TABS = ("home", "trades", "items", "auto", "ai", "history", "settings")
 LIVE_AUTO_ACCEPT_TEXT = ("The app will accept new received trades on Roblox, by itself, when they pass every rule "
                          "you set. Accepted trades can't be undone.\n\n"
                          "- Scammers inflate RAP and prices; the value rule and blocking projected items protect "
@@ -530,6 +535,7 @@ class HistoryScreen(Screen):
 
 class SettingsScreen(Screen):
     battery_text = StringProperty("")
+    ai_key_text = StringProperty("")
 
     def on_pre_enter(self):
         c = App.get_running_app().cfg
@@ -548,35 +554,32 @@ class SettingsScreen(Screen):
         ids.trade_notify_on.active = c.app.trade_notifications
         ids.direct_trades.active = c.app.direct_trades
         ids.updates_on.active = c.app.check_updates
-        aa = c.auto_accept
-        ids.aa_on.active = aa.enabled
-        self.set_aa_mode(aa.mode)
-        for field_id, gain in (("aa_value", aa.min_value_gain), ("aa_rap", aa.min_rap_gain),
-                               ("aa_price", aa.min_price_gain)):
-            ids[field_id].text = "" if gain is None else f"{gain:g}"
-        ids.aa_projected.active = aa.block_projected
-        ids.aa_max.text = str(aa.max_per_day)
+        ids.ai_on.active = c.ai.enabled
+        self.set_ai_provider(c.ai.provider, model=c.ai.model)
         self.refresh_battery()
 
-    def set_aa_mode(self, mode: str):
-        self._aa_mode = mode
-        self.ids.aa_test.selected = mode == "test"
-        self.ids.aa_live.selected = mode == "live"
+    # ---- AI recommendations ----------------------------------------------------------------
+    def set_ai_provider(self, provider: str, model: str | None = None):
+        self._ai_provider = provider if provider in PROVIDERS else "claude"
+        info = PROVIDERS[self._ai_provider]
+        self.ids.ai_claude.selected = self._ai_provider == "claude"
+        self.ids.ai_openai.selected = self._ai_provider == "openai"
+        self.ids.ai_key.text = ""
+        self.ids.ai_key.hint_text = info["key_hint"]
+        self.ids.ai_model.hint_text = info["model"]
+        if model is not None:
+            self.ids.ai_model.text = model
+        saved = bool(ai_api_key(self._ai_provider))
+        self.ai_key_text = (f"A {info['label']} key is saved. Leave the box empty to keep it." if saved else
+                            f"Make a key at {info['key_url']} and paste it here.")
 
-    def show_aa_log(self):
+    def forget_ai_key(self):
         app = App.get_running_app()
-        entries = droid.auto_accept_log()[:12]
-        if not entries:
-            return app.notice("Auto-accept decisions", "Nothing yet. New received trades show up here once "
-                                                       "auto-accept is on.")
-        lines = []
-        for e in entries:
-            when = time.strftime("%d %b %H:%M", time.localtime(e.get("t", 0)))
-            mode = "LIVE" if e.get("live") else "test"
-            pct = f" ({e['pct']})" if e.get("pct") else ""
-            lines.append(f"[b]{when}  {e.get('partner', '?')}{pct}[/b]  [{mode}]\n{e.get('result', '')}")
-        app.notice("Auto-accept decisions", "\n\n".join(lines))
+        save_env_value(env_path(), PROVIDERS[self._ai_provider]["key_env"], "")
+        self.set_ai_provider(self._ai_provider)
+        app.toast("API key removed")
 
+    # ---- other ---------------------------------------------------------------------------------
     def refresh_battery(self):
         ignoring = droid.ignoring_battery_optimizations()
         self.battery_text = ("" if ignoring in (None, True) else
@@ -609,8 +612,6 @@ class SettingsScreen(Screen):
             jmin, jmax = float(ids.jmin.text or 0), float(ids.jmax.text or 0)
             max_ads = int(ids.max_ads.text or 0)
             overpay = float(ids.overpay.text or 0)
-            aa_gains = [float(ids[f].text) if ids[f].text.strip() else None for f in ("aa_value", "aa_rap", "aa_price")]
-            aa_max = int(ids.aa_max.text or 0)
         except ValueError:
             return app.notice("Settings", "Please enter numbers only.")
         c = copy.deepcopy(app.cfg)
@@ -628,35 +629,206 @@ class SettingsScreen(Screen):
         c.app.trade_notifications = ids.trade_notify_on.active
         c.app.direct_trades = ids.direct_trades.active
         c.app.check_updates = ids.updates_on.active
-        aa = c.auto_accept
-        aa.enabled = ids.aa_on.active
-        aa.mode = self._aa_mode
-        aa.min_value_gain, aa.min_rap_gain, aa.min_price_gain = aa_gains
-        aa.block_projected = ids.aa_projected.active
-        aa.max_per_day = aa_max
-        if aa.enabled and not c.app.direct_trades:
-            return app.notice("Auto-accept", 'Auto-accept needs "Read my trades directly" turned on.')
-        going_live = aa.enabled and aa.mode == "live" and not (app.cfg.auto_accept.enabled
-                                                               and app.cfg.auto_accept.mode == "live")
+        c.ai.enabled = ids.ai_on.active
+        c.ai.provider = self._ai_provider
+        c.ai.model = ids.ai_model.text.strip()
+        new_key = ids.ai_key.text.strip()
         problems = [e for e in validate_config(c) if not e.startswith(("No ads", "All ads", "roblox_user_id"))
                     and not e.startswith("Ad '")]
         if problems:
             return app.notice("Check your settings", "\n".join(problems))
+        if new_key:
+            save_env_value(env_path(), PROVIDERS[c.ai.provider]["key_env"], new_key)
+            REDACTOR.add_secret(new_key)
+        turned_on = c.app.direct_trades and not app.cfg.app.direct_trades
+        app.cfg = c
+        app.persist()
+        app.apply_trade_notifications()
+        self.set_ai_provider(c.ai.provider)
+        if turned_on and droid.RobloxDirect.available:
+            droid.request_notification_permission()
+            app.notice("Read my trades directly", DIRECT_TRADES_TEXT)
+        else:
+            app.toast("Settings saved")
+
+
+def ai_api_key(provider: str) -> str:
+    return os.environ.get(PROVIDERS[provider]["key_env"], "").strip()
+
+
+class AutoScreen(Screen):
+    """Auto-accept: rules for accepting new received trades (test mode first). See org.roliposter.AutoAccept."""
+
+    def on_pre_enter(self):
+        c = App.get_running_app().cfg
+        ids, aa = self.ids, c.auto_accept
+        ids.aa_on.active = aa.enabled
+        self.set_aa_mode(aa.mode)
+        for field_id, gain in (("aa_value", aa.min_value_gain), ("aa_rap", aa.min_rap_gain),
+                               ("aa_price", aa.min_price_gain)):
+            ids[field_id].text = "" if gain is None else f"{gain:g}"
+        ids.aa_projected.active = aa.block_projected
+        ids.aa_max.text = str(aa.max_per_day)
+
+    def set_aa_mode(self, mode: str):
+        self._aa_mode = mode
+        self.ids.aa_test.selected = mode == "test"
+        self.ids.aa_live.selected = mode == "live"
+
+    def show_aa_log(self):
+        app = App.get_running_app()
+        entries = droid.auto_accept_log()[:12]
+        if not entries:
+            return app.notice("Auto-accept decisions", "Nothing yet. New received trades show up here once "
+                                                       "auto-accept is on.")
+        lines = []
+        for e in entries:
+            when = time.strftime("%d %b %H:%M", time.localtime(e.get("t", 0)))
+            mode = "LIVE" if e.get("live") else "test"
+            pct = f" ({e['pct']})" if e.get("pct") else ""
+            lines.append(f"[b]{when}  {e.get('partner', '?')}{pct}[/b]  [{mode}]\n{e.get('result', '')}")
+        app.notice("Auto-accept decisions", "\n\n".join(lines))
+
+    def save(self):
+        app = App.get_running_app()
+        ids = self.ids
+        try:
+            gains = [float(ids[f].text) if ids[f].text.strip() else None for f in ("aa_value", "aa_rap", "aa_price")]
+            max_per_day = int(ids.aa_max.text or 0)
+        except ValueError:
+            return app.notice("Auto-accept", "Please enter numbers only.")
+        c = copy.deepcopy(app.cfg)
+        aa = c.auto_accept
+        aa.enabled = ids.aa_on.active
+        aa.mode = self._aa_mode
+        aa.min_value_gain, aa.min_rap_gain, aa.min_price_gain = gains
+        aa.block_projected = ids.aa_projected.active
+        aa.max_per_day = max_per_day
+        if aa.enabled and not c.app.direct_trades:
+            return app.notice("Auto-accept", 'Auto-accept needs "Read my trades directly" (Settings) turned on.')
+        problems = [e for e in validate_config(c) if "uto-accept" in e or "auto_accept" in e]
+        if problems:
+            return app.notice("Check your rules", "\n".join(problems))
+        going_live = aa.enabled and aa.mode == "live" and not (app.cfg.auto_accept.enabled
+                                                               and app.cfg.auto_accept.mode == "live")
         if going_live and not getattr(self, "_live_confirmed", False):
             def confirm():
                 self._live_confirmed = True
                 self.save()
             return app.notice("Turn on live auto-accept?", LIVE_AUTO_ACCEPT_TEXT, (("Cancel", None), ("Turn on", confirm)))
         self._live_confirmed = False
-        turned_on = c.app.direct_trades and not app.cfg.app.direct_trades
         app.cfg = c
         app.persist()
         app.apply_trade_notifications()
-        if turned_on and droid.RobloxDirect.available:
-            droid.request_notification_permission()
-            app.notice("Read my trades directly", DIRECT_TRADES_TEXT)
-        else:
-            app.toast("Settings saved")
+        app.toast("Auto-accept saved")
+
+
+class AiScreen(Screen):
+    """AI trade recommendations: upgrades, downgrades and holds for your inventory, on request."""
+    status_text = StringProperty("")
+    summary_text = StringProperty("")
+    busy = BooleanProperty(False)
+
+    ADVICE_FILE = "ai_advice.json"
+
+    def on_pre_enter(self):
+        app = App.get_running_app()
+        app.load_portfolio()  # current prices and value history make for better advice
+        if not app.cfg.ai.enabled:
+            self.status_text = "AI recommendations are off. Turn them on in Settings and add your API key."
+        elif not ai_api_key(app.cfg.ai.provider):
+            self.status_text = f"Add your {PROVIDERS[app.cfg.ai.provider]['label']} API key in Settings."
+        elif not self.busy:
+            self.status_text = ""
+        self.show_saved()
+
+    def show_saved(self):
+        try:
+            advice = Advice.from_dict(json.loads((HOME / self.ADVICE_FILE).read_text(encoding="utf-8")))
+        except (OSError, ValueError, TypeError, KeyError):
+            advice = None
+        self.render(advice)
+
+    def run(self):
+        app = App.get_running_app()
+        ai = app.cfg.ai
+        if self.busy:
+            return
+        if not ai.enabled:
+            return app.notice("AI recommendations", "Turn them on in Settings first.")
+        key = ai_api_key(ai.provider)
+        if not key:
+            return app.notice("AI recommendations", f"Add your {PROVIDERS[ai.provider]['label']} API key in Settings.")
+        if app.catalog is None or app.inventory is None:
+            return app.notice("AI recommendations", "Your items are still loading. Try again in a moment.")
+        if app.inventory.private:
+            return app.notice("AI recommendations", "Your Roblox inventory is private, so there's nothing to advise on.")
+        self.busy = True
+        label = PROVIDERS[ai.provider]["label"]
+        self.status_text = f"Asking {label}... this can take a minute."
+        context = build_context(app.inventory, app.catalog, app.best_prices, app.value_history)
+        model = ai.model or PROVIDERS[ai.provider]["model"]
+        provider, inventory, catalog = ai.provider, app.inventory, app.catalog
+
+        def work():
+            try:
+                answer = ask(provider, key, context, model=model)
+                advice = check(answer, inventory, catalog, provider=provider, model=model)
+                (HOME / self.ADVICE_FILE).write_text(json.dumps(advice.to_dict()), encoding="utf-8")
+                self._done(advice, "")
+            except AdvisorError as e:
+                self._done(None, str(e))
+            except Exception as e:  # never leave the screen stuck on "Asking..."
+                log.exception("AI recommendations failed")
+                self._done(None, f"Something went wrong: {type(e).__name__}. Try again.")
+        threading.Thread(target=work, daemon=True).start()
+
+    @mainthread
+    def _done(self, advice, error: str):
+        self.busy = False
+        if error:
+            self.status_text = error
+            return
+        self.status_text = ""
+        self.render(advice)
+
+    def render(self, advice):
+        app = App.get_running_app()
+        box = self.ids.recs
+        box.clear_widgets()
+        if advice is None:
+            self.summary_text = ""
+            return
+        when = time.strftime("%d %b %H:%M", time.localtime(advice.created))
+        source = PROVIDERS.get(advice.provider, {}).get("label", advice.provider)
+        note = f" · {advice.dropped} unusable suggestion(s) left out" if advice.dropped else ""
+        self.summary_text = (f"{advice.summary}\n\n[size={int(sp(12))}][color={P.MUTED}]{source} · {advice.model}"
+                             f" · {when}{note}[/color][/size]")
+        titles = {"upgrade": "Upgrade", "downgrade": "Downgrade", "hold": "Hold"}
+        shown = []
+        for rec in advice.recommendations:
+            card = Factory.Card()
+            card.add_widget(Factory.Title(text=f"{titles.get(rec.kind, rec.kind)}  [size={int(sp(13))}]"
+                                               f"[color={P.MUTED}]{rec.confidence} confidence[/color][/size]"))
+            sides = (("KEEP", rec.give + rec.get),) if rec.kind == "hold" else (("YOU GIVE", rec.give),
+                                                                               ("YOU GET", rec.get))
+            for label, item_ids in sides:
+                if not item_ids:
+                    continue
+                card.add_widget(Factory.FieldLabel(text=label))
+                for item_id in item_ids:
+                    card.add_widget(app.item_row(item_id))
+                shown += item_ids
+            if rec.kind != "hold" and app.catalog:
+                give = sum(app.catalog.get(i).default_value for i in rec.give if app.catalog.get(i))
+                get = sum(app.catalog.get(i).default_value for i in rec.get if app.catalog.get(i))
+                if give:
+                    card.add_widget(Factory.Muted(text=f"Value {give:,} for {get:,} ({(get - give) / give * 100:+.0f}%)"))
+            card.add_widget(Factory.Txt(text=rec.reason, font_size=sp(14)))
+            box.add_widget(card)
+        if not advice.recommendations:
+            box.add_widget(Factory.Muted(text="No usable recommendations this time.", halign="center"))
+        app.request_thumbs(shown)
 
 
 LINE_COLORS = {"value": P.ACCENT, "rap": "#a78bfa", "price": P.WARN}  # chart lines and their legend
@@ -1095,7 +1267,8 @@ class RoliApp(App):
         Builder.load_file(str(HERE / "ui.kv"))
         self.sm = SwipeManager(transition=SlideTransition(duration=0.18))
         for screen in (HomeScreen(), EditScreen(), SettingsScreen(), HistoryScreen(), CookieScreen(),
-                       TradesScreen(), TradeScreen(), ItemsScreen(), HelpScreen(), PickerScreen()):
+                       TradesScreen(), TradeScreen(), ItemsScreen(), AutoScreen(), AiScreen(), HelpScreen(),
+                       PickerScreen()):
             self.sm.add_widget(screen)
         # Before anything opens the Trades tab (e.g. a tapped notification): list or Roblox page.
         Clock.schedule_once(lambda *_: self.sync_direct_trades(), 0)
@@ -1414,9 +1587,9 @@ class RoliApp(App):
         screen = droid.launch_extra("screen")
         if screen == "edit" and self.cfg.ads:
             self.edit_ad(0)
-        elif screen in ("settings", "history", "help", "trades"):
+        elif screen in TABS:
             self.switch_tab(screen)
-        elif screen == "cookie":
+        elif screen in ("cookie", "help"):
             self.show(screen)
         if droid.launch_extra("search") and self.cfg.ads:
             self.sm.get_screen("edit").open_picker("offer")

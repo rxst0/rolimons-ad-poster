@@ -7,6 +7,7 @@ import requests
 ITEM_DETAILS_URL = "https://www.rolimons.com/itemapi/itemdetails"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 DEMAND_LABELS = {-1: "unassigned", 0: "terrible", 1: "low", 2: "normal", 3: "high", 4: "amazing"}
+TREND_LABELS = {-1: "unassigned", 0: "lowering", 1: "unstable", 2: "stable", 3: "raising", 4: "fluctuating"}
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,10 @@ class ItemInfo:
     @property
     def demand_label(self) -> str:
         return DEMAND_LABELS.get(self.demand, str(self.demand))
+
+    @property
+    def trend_label(self) -> str:
+        return TREND_LABELS.get(self.trend, str(self.trend))
 
 
 class ItemCatalog:

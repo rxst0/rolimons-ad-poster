@@ -30,3 +30,13 @@ def test_auto_accept_validation():
     assert problems(max_per_day=500)
     assert problems(min_value_gain=5000)
     assert problems(enabled=True, min_value_gain=None)  # at least one rule needed
+
+
+def test_ai_settings_default_off_and_round_trip():
+    cfg = config_from_dict({})
+    assert (cfg.ai.enabled, cfg.ai.provider, cfg.ai.model) == (False, "claude", "")
+    cfg = config_from_dict({"ai": {"enabled": True, "provider": "OpenAI", "model": " gpt-5 "}})
+    assert (cfg.ai.enabled, cfg.ai.provider, cfg.ai.model) == (True, "openai", "gpt-5")
+    assert config_from_dict(asdict(cfg)).ai == cfg.ai
+    cfg.ai.provider = "bard"
+    assert any("ai.provider" in e for e in validate_config(cfg))

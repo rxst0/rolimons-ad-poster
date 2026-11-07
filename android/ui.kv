@@ -658,52 +658,41 @@
                         on_release: root.sign_out_roblox()
                 Card:
                     Title:
-                        text: 'Auto-accept trades'
+                        text: 'AI trade recommendations'
                     Muted:
-                        text: 'Needs "Read my trades directly". Checks each new received trade against your rules. Test mode only tells you what it would accept; Live accepts on Roblox. Leave a gain empty to not check it.'
+                        text: "Connect Claude or ChatGPT with your own API key. On the AI tab it suggests upgrades and downgrades for your inventory, using Rolimons values, RAP, demand, trend and current prices. Only when you ask: each request costs a few cents on your API account. Your items and market data are sent to the AI company; your Roblox and Rolimons sign-ins never are."
                     SettingRow:
-                        id: aa_on
-                        text: 'Auto-accept trades that pass my rules'
+                        id: ai_on
+                        text: 'AI recommendations'
                     BoxLayout:
                         size_hint_y: None
                         height: dp(40)
                         spacing: dp(8)
                         Chip:
-                            id: aa_test
-                            text: 'Test mode'
-                            on_release: root.set_aa_mode('test')
+                            id: ai_claude
+                            text: 'Claude'
+                            on_release: root.set_ai_provider('claude', model='')
                         Chip:
-                            id: aa_live
-                            text: 'Live'
-                            on_release: root.set_aa_mode('live')
+                            id: ai_openai
+                            text: 'ChatGPT'
+                            on_release: root.set_ai_provider('openai', model='')
                     FieldLabel:
-                        text: 'MINIMUM VALUE GAIN (%)'
+                        text: 'API KEY'
                     Field:
-                        id: aa_value
-                        hint_text: 'e.g. 10'
-                    FieldLabel:
-                        text: 'MINIMUM RAP GAIN (%)'
-                    Field:
-                        id: aa_rap
-                        hint_text: 'empty = not checked'
-                    FieldLabel:
-                        text: 'MINIMUM PRICE GAIN (%)'
-                    Field:
-                        id: aa_price
-                        hint_text: 'empty = not checked'
-                    SettingRow:
-                        id: aa_projected
-                        text: 'Never accept trades with projected items'
-                    FieldLabel:
-                        text: 'MAX AUTO-ACCEPTS PER DAY (LIVE)'
-                    Field:
-                        id: aa_max
-                        input_filter: 'int'
+                        id: ai_key
+                        password: True
                     Muted:
-                        text: 'Always skipped: items Rolimons doesn\'t track, trades that are no longer open, and a price rule when an item has no realistic price.'
+                        text: root.ai_key_text
+                    FieldLabel:
+                        text: 'MODEL (EMPTY = DEFAULT)'
+                    Field:
+                        id: ai_model
                     FlatButton:
-                        text: 'Show recent decisions'
-                        on_release: root.show_aa_log()
+                        text: 'Remove saved API key'
+                        on_release: root.forget_ai_key()
+                FlatButton:
+                    text: 'Help'
+                    on_release: app.show('help')
                 AccentButton:
                     text: 'Save settings'
                     on_release: root.save()
@@ -857,7 +846,7 @@
 
 # ---- tab bar ---------------------------------------------------------------------
 <NavButton>:
-    font_size: sp(12)
+    font_size: sp(11)
     bold: app.active_tab == self.tab
     color: ACCENT if app.active_tab == self.tab else MUTED
     halign: 'center'
@@ -896,14 +885,17 @@
         text: 'Items'
         tab: 'items'
     NavButton:
+        text: 'Auto'
+        tab: 'auto'
+    NavButton:
+        text: 'AI'
+        tab: 'ai'
+    NavButton:
         text: 'History'
         tab: 'history'
     NavButton:
         text: 'Settings'
         tab: 'settings'
-    NavButton:
-        text: 'Help'
-        tab: 'help'
 
 <TradeThumb@Image>:
     size_hint: None, None
@@ -1304,6 +1296,118 @@
                     text: 'Open on roblox.com'
                     on_release: root.open_roblox()
 
+<AutoScreen>:
+    name: 'auto'
+    BoxLayout:
+        orientation: 'vertical'
+        canvas.before:
+            Color:
+                rgba: BG
+            Rectangle:
+                pos: self.pos
+                size: self.size
+        TopBar:
+            title: 'Auto-accept'
+            show_back: False
+        ScrollView:
+            do_scroll_x: False
+            BoxLayout:
+                orientation: 'vertical'
+                padding: dp(14), dp(12), dp(14), dp(30)
+                spacing: dp(12)
+                size_hint_y: None
+                height: self.minimum_height
+                Card:
+                    Muted:
+                        text: 'Needs "Read my trades directly". Checks each new received trade against your rules. Test mode only tells you what it would accept; Live accepts on Roblox. Leave a gain empty to not check it.'
+                    SettingRow:
+                        id: aa_on
+                        text: 'Auto-accept trades that pass my rules'
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(40)
+                        spacing: dp(8)
+                        Chip:
+                            id: aa_test
+                            text: 'Test mode'
+                            on_release: root.set_aa_mode('test')
+                        Chip:
+                            id: aa_live
+                            text: 'Live'
+                            on_release: root.set_aa_mode('live')
+                    FieldLabel:
+                        text: 'MINIMUM VALUE GAIN (%)'
+                    Field:
+                        id: aa_value
+                        hint_text: 'e.g. 10'
+                    FieldLabel:
+                        text: 'MINIMUM RAP GAIN (%)'
+                    Field:
+                        id: aa_rap
+                        hint_text: 'empty = not checked'
+                    FieldLabel:
+                        text: 'MINIMUM PRICE GAIN (%)'
+                    Field:
+                        id: aa_price
+                        hint_text: 'empty = not checked'
+                    SettingRow:
+                        id: aa_projected
+                        text: 'Never accept trades with projected items'
+                    FieldLabel:
+                        text: 'MAX AUTO-ACCEPTS PER DAY (LIVE)'
+                    Field:
+                        id: aa_max
+                        input_filter: 'int'
+                    Muted:
+                        text: 'Always skipped: items Rolimons doesn\'t track, trades that are no longer open, and a price rule when an item has no realistic price.'
+                    FlatButton:
+                        text: 'Show recent decisions'
+                        on_release: root.show_aa_log()
+                AccentButton:
+                    text: 'Save auto-accept'
+                    on_release: root.save()
+
+<AiScreen>:
+    name: 'ai'
+    BoxLayout:
+        orientation: 'vertical'
+        canvas.before:
+            Color:
+                rgba: BG
+            Rectangle:
+                pos: self.pos
+                size: self.size
+        TopBar:
+            title: 'AI recommendations'
+            show_back: False
+        ScrollView:
+            do_scroll_x: False
+            BoxLayout:
+                orientation: 'vertical'
+                padding: dp(14), dp(12), dp(14), dp(30)
+                spacing: dp(12)
+                size_hint_y: None
+                height: self.minimum_height
+                Muted:
+                    text: 'Upgrades, downgrades and items to hold, from your AI, based on your inventory and the Rolimons market. Suggestions only: check every trade yourself. Values change and nothing here is guaranteed.'
+                AccentButton:
+                    text: 'Asking...' if root.busy else 'Get recommendations'
+                    disabled: root.busy
+                    on_release: root.run()
+                Txt:
+                    text: root.status_text
+                    color: WARN
+                    height: self.texture_size[1] if root.status_text else 0
+                Txt:
+                    text: root.summary_text
+                    height: self.texture_size[1] if root.summary_text else 0
+                BoxLayout:
+                    id: recs
+                    orientation: 'vertical'
+                    spacing: dp(12)
+                    size_hint_y: None
+                    height: self.minimum_height
+
 <HelpScreen>:
     name: 'help'
     BoxLayout:
@@ -1316,7 +1420,7 @@
                 size: self.size
         TopBar:
             title: 'Help'
-            show_back: False
+            show_back: True
         ScrollView:
             do_scroll_x: False
             BoxLayout:

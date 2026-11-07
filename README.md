@@ -140,9 +140,19 @@ How it works, and what changes:
 - Anyone with your unlocked, rooted phone could in principle get the cookie, just like from any browser
   on that phone. If you'd rather not take that risk, leave the option off.
 
+## AI recommendations (Android)
+
+Off by default. In **Settings → AI trade recommendations**, pick **Claude** (Anthropic) or **ChatGPT** (OpenAI) and paste your own API key from that company (console.anthropic.com or platform.openai.com). Then on the **AI** tab, tap **Get recommendations**.
+
+- The AI gets your limiteds and the Rolimons market around their values: value, RAP, demand, trend, projected/hyped/rare flags, current best price, and your inventory's value change over 1, 6 and 12 months. It suggests **upgrades**, **downgrades** and items to **hold**, with a reason and a confidence.
+- Suggestions are checked before you see them: you must own what it says to give, everything it says to get must be a real item, and it can't suggest receiving a projected item.
+- It only runs when you tap the button. Each run costs a few cents on your own API account (the app sends up to 250 market items besides yours). The default models are `claude-opus-5-5` and `gpt-5`; change them in Settings.
+- Your items and market data are sent to the AI company you picked. Your Roblox and Rolimons sign-ins are never sent. The API key is stored in the app's private `.env` file, like the Rolimons cookie.
+- It's a suggestion tool, not financial advice. Values change, and the AI can be wrong.
+
 ## Auto-accept (Android)
 
-Off by default, and it needs **Read my trades directly**. In **Settings → Auto-accept trades** you set rules,
+Off by default, and it needs **Read my trades directly**. On the **Auto** tab you set rules,
 and each *new* received trade is checked against all of them:
 - **Minimum value gain %** (Rolimons value; RAP when an item has none), **minimum RAP gain %** and
   **minimum price gain %** (cheapest copy for sale now). Leave one empty to not check it.

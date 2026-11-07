@@ -254,16 +254,32 @@ class SelfTest:
         self.dismiss_popups()
         self.record("setting saved", load_config(config_path()).rotation == "random")
 
-        # History and Help tabs, then Back returns to the Ads tab.
+        # History tab; Help (opened from Settings) goes back to Settings; Back from a tab returns to Ads.
         app.switch_tab("history")
         yield 1
         self.record("history tab opens", app.sm.current == "history" and app.active_tab == "history")
-        app.switch_tab("help")
+        app.switch_tab("settings")
         yield 1
-        self.record("help tab opens", app.sm.current == "help")
+        app.show("help")
+        yield 1
+        self.record("help opens from Settings", app.sm.current == "help")
+        app.go_back()
+        yield 1
+        self.record("back from Help returns to Settings", app.sm.current == "settings")
         app.go_back()
         yield 1
         self.record("back from a tab returns to Ads", app.sm.current == "home")
+        # The new Auto and AI tabs open (the AI tab is off until turned on in Settings).
+        app.switch_tab("auto")
+        yield 1
+        self.record("auto-accept tab opens", app.sm.current == "auto" and app.active_tab == "auto")
+        app.switch_tab("ai")
+        yield 1
+        ai = app.sm.get_screen("ai")
+        self.record("AI tab opens and says it's off", app.sm.current == "ai" and "off" in ai.status_text,
+                    ai.status_text)
+        app.switch_tab("home")
+        yield 1
 
         # Swiping between tabs (left = next tab, right = previous).
         app.switch_tab("history")

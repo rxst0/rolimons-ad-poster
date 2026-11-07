@@ -55,6 +55,14 @@ class AutoAcceptSettings:
 
 
 @dataclass
+class AiSettings:
+    """AI trade recommendations (Claude or ChatGPT, with the user's own API key, kept in .env)."""
+    enabled: bool = False
+    provider: str = "claude"   # "claude" or "openai" (see roliposter.ai_advisor.PROVIDERS)
+    model: str = ""            # empty = the provider's default model
+
+
+@dataclass
 class AppSettings:
     close_to_tray: bool = True        # keep posting in the tray when the window is closed
     auto_start_posting: bool = False  # start posting as soon as the app opens
@@ -79,6 +87,7 @@ class Config:
     posting_hours: PostingHours = field(default_factory=PostingHours)
     app: AppSettings = field(default_factory=AppSettings)
     auto_accept: AutoAcceptSettings = field(default_factory=AutoAcceptSettings)
+    ai: AiSettings = field(default_factory=AiSettings)
     ads: list[Ad] = field(default_factory=list)
 
     def enabled_ads(self) -> list[Ad]:
@@ -116,6 +125,7 @@ def config_from_dict(data: dict) -> Config:
         ph = data.get("posting_hours", {}) or {}
         app = data.get("app", {}) or {}
         aa = data.get("auto_accept", {}) or {}
+        ai = data.get("ai", {}) or {}
         return Config(
             roblox_user_id=int(data.get("roblox_user_id", 0) or 0),
             rotation=str(data.get("rotation", "sequential")).lower(),
@@ -152,6 +162,8 @@ def config_from_dict(data: dict) -> Config:
                 block_projected=bool(aa.get("block_projected", True)),
                 max_per_day=int(aa.get("max_per_day", 5)),
             ),
+            ai=AiSettings(enabled=bool(ai.get("enabled", False)), provider=str(ai.get("provider", "claude")).lower(),
+                          model=str(ai.get("model", "") or "").strip()),
             ads=ads,
         )
     except (TypeError, ValueError, AttributeError) as e:
@@ -205,6 +217,8 @@ def validate_config(cfg: Config) -> list[str]:
             errors.append(f"Auto-accept minimum {label} gain must be between -100% and 1000%.")
     if aa.enabled and aa.min_value_gain is None and aa.min_rap_gain is None and aa.min_price_gain is None:
         errors.append("Auto-accept needs at least one minimum gain (value, RAP or price).")
+    if cfg.ai.provider not in ("claude", "openai"):
+        errors.append('ai.provider must be "claude" or "openai".')
     if not cfg.ads:
         errors.append("No ads defined.")
     elif not cfg.enabled_ads():
